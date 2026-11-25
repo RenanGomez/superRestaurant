@@ -13,7 +13,6 @@ import {
 } from "react";
 
 import { Field } from "../../../components/field-hint";
-import { trapFocusIndex } from "../../../lib/focus-trap";
 import {
   INVENTORY_TABS,
   INVENTORY_TAB_LABELS,
@@ -26,6 +25,8 @@ import {
   type InventoryTab,
 } from "../../../lib/inventory-ui";
 import { uiButton } from "../../../lib/ui-classes";
+import { InventoryModal } from "./inventory-modal";
+import { MovementsPanel } from "./movements-panel";
 import type { InventoryActionResult, InventoryError, InventoryOperation } from "./actions";
 
 const panelClass = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -78,8 +79,20 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
   const tabRefs = useRef<Partial<Record<InventoryTab, HTMLButtonElement | null>>>({});
   const insumosTabId = useId();
   const almacenesTabId = useId();
+  const movimientosTabId = useId();
   const insumosPanelId = useId();
   const almacenesPanelId = useId();
+  const movimientosPanelId = useId();
+  const tabButtonIds: Readonly<Record<InventoryTab, string>> = {
+    almacenes: almacenesTabId,
+    insumos: insumosTabId,
+    movimientos: movimientosTabId,
+  };
+  const tabPanelIds: Readonly<Record<InventoryTab, string>> = {
+    almacenes: almacenesPanelId,
+    insumos: insumosPanelId,
+    movimientos: movimientosPanelId,
+  };
 
   async function loadItems(): Promise<void> {
     setItems({ status: "loading" });
@@ -124,11 +137,13 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
   }, [initialTab]);
 
   useEffect(() => {
-    if (activeTab === "insumos" && items.status === "idle") void loadItems();
+    if ((activeTab === "insumos" || activeTab === "movimientos") && items.status === "idle") void loadItems();
   }, [activeTab, items.status]);
 
   useEffect(() => {
-    if (activeTab === "almacenes" && warehouses.status === "idle") void loadWarehouses();
+    if ((activeTab === "almacenes" || activeTab === "movimientos") && warehouses.status === "idle") {
+      void loadWarehouses();
+    }
   }, [activeTab, warehouses.status]);
 
   useEffect(() => {
@@ -199,9 +214,9 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
               ref={(element) => { tabRefs.current[tab] = element; }}
               type="button"
               role="tab"
-              id={tab === "insumos" ? insumosTabId : almacenesTabId}
+              id={tabButtonIds[tab]}
               aria-selected={selected}
-              aria-controls={tab === "insumos" ? insumosPanelId : almacenesPanelId}
+              aria-controls={tabPanelIds[tab]}
               tabIndex={selected ? 0 : -1}
               className={uiButton(selected ? "selected" : "secondary", "rounded-full")}
               onClick={() => selectTab(tab)}
@@ -305,6 +320,20 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
         </section>
       )}
 
+      {activeTab === "movimientos" && (
+        <section role="tabpanel" id={movimientosPanelId} aria-labelledby={movimientosTabId} tabIndex={0} className={panelClass}>
+          <MovementsPanel
+            action={action}
+            canManage={canManage}
+            items={items.status === "ready" ? items.value : []}
+            warehouses={warehouses.status === "ready" ? warehouses.value : []}
+            itemsStatus={items.status}
+            warehousesStatus={warehouses.status}
+            onRetryCatalog={() => { void loadItems(); void loadWarehouses(); }}
+          />
+        </section>
+      )}
+
       {dialog?.kind === "item" && (
         <ItemDialog item={dialog.item} action={action} onClose={() => setDialog(undefined)} onSaved={itemSaved} />
       )}
@@ -400,63 +429,6 @@ function LoadError({ message, onRetry }: { readonly message: string; readonly on
   );
 }
 
-function Modal({ children, onClose, title }: {
-  readonly children: ReactNode;
-  readonly onClose: () => void;
-  readonly title: string;
-}): ReactNode {
-  const headingId = useId();
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const first = dialogRef.current?.querySelector<HTMLElement>(
-      'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    );
-    first?.focus();
-    return () => { opener?.focus(); };
-  }, []);
-
-  useEffect(() => {
-    function onKeyDown(event: globalThis.KeyboardEvent): void {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab" || dialogRef.current === null) return;
-      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )].filter((element) => element.getClientRects().length > 0);
-      const target = trapFocusIndex(
-        focusable.length,
-        focusable.indexOf(document.activeElement as HTMLElement),
-        event.shiftKey,
-      );
-      if (target !== null) {
-        event.preventDefault();
-        focusable[target]?.focus();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-[oklch(10%_0.02_250_/_0.45)] p-4 sm:items-center"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={headingId}
-    >
-      <div ref={dialogRef} className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-surface p-4 sm:p-5">
-        <h2 id={headingId} className="font-heading text-lg font-semibold">{title}</h2>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 function ItemDialog({ action, item, onClose, onSaved }: {
   readonly action: InventoryWorkspaceProps["action"];
   readonly item?: InventoryItemV1 | undefined;
@@ -507,7 +479,7 @@ function ItemDialog({ action, item, onClose, onSaved }: {
   }
 
   return (
-    <Modal title={editing ? "Editar insumo" : "Nuevo insumo"} onClose={close}>
+    <InventoryModal title={editing ? "Editar insumo" : "Nuevo insumo"} onClose={close}>
       <form onSubmit={submit} className="mt-4 grid gap-3" aria-busy={saving}>
         <Field className="grid gap-1 text-sm" hint="Nombre con el que el equipo reconoce el insumo." label="Nombre">
           {(id) => <input id={id} name="name" className={inputClass} defaultValue={item?.name ?? ""} maxLength={160}
@@ -557,7 +529,7 @@ function ItemDialog({ action, item, onClose, onSaved }: {
           </button>
         </div>
       </form>
-    </Modal>
+    </InventoryModal>
   );
 }
 
@@ -601,7 +573,7 @@ function WarehouseDialog({ action, warehouse, onClose, onSaved }: {
   }
 
   return (
-    <Modal title={editing ? "Editar almacén" : "Nuevo almacén"} onClose={close}>
+    <InventoryModal title={editing ? "Editar almacén" : "Nuevo almacén"} onClose={close}>
       <form onSubmit={submit} className="mt-4 grid gap-3" aria-busy={saving}>
         <Field className="grid gap-1 text-sm" hint="Nombre del almacén dentro de esta sucursal, por ejemplo Bodega o Cámara fría." label="Nombre">
           {(id) => <input id={id} name="name" className={inputClass} defaultValue={warehouse?.name ?? ""} maxLength={160}
@@ -619,6 +591,6 @@ function WarehouseDialog({ action, warehouse, onClose, onSaved }: {
           </button>
         </div>
       </form>
-    </Modal>
+    </InventoryModal>
   );
 }
