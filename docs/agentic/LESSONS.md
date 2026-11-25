@@ -6,7 +6,9 @@ incluyen en `docs/agentic/WORKER_RULES.md` para todos los workers.
 
 ## Reglas activas
 
-- Aun sin lecciones registradas.
+- En los briefs, los comandos de test se ejecutan con el cwd del paquete (`pnpm --filter X exec ...` corre en `apps/web`, etc.): usa rutas relativas al paquete (`node .test-dist/lib/...`), no a la raíz del worktree.
+- dsh agota el turno si encadena demasiadas puertas: una sola cadena de verificación al final, y el informe se emite aunque quede algo `NO VERIFICADO`.
+- Ningún worker commitea: el orquestador commitea, publica y fusiona desde el worktree.
 
 ## Proceso
 

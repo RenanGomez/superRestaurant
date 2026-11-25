@@ -1,3 +1,18 @@
+## Ola 0 — arranque del loop solo-dsh — 2026-11-25 (nivel D, orquestador)
+
+- **Instrucción de Emmanuel:** ejecutar `docs/plans/plan-deepseek-fases-3-8.md` de principio a fin, autónomo, con **solo workers DeepSeek (dsh)** en paralelo; sin codex, agy, AO ni subagentes Claude como escritores. Registrado en `DECISIONS_PENDING.md`.
+- **Estado verificado en git:** `main` real `3f8b3570` (PR #72), 0 PRs abiertos al arrancar. M1 y M2 fusionados salvo signoff, P2/P3 de Ola 0 y 5 migraciones remotas sin aplicar. `backlog.json` reconciliado: 45 ítems.
+- **Pipeline:** `opencode` 1.19.6 + `OPENCODE_API_KEY` (provider `opencodego`, alias `default` → `deepseek-v4.1-flash`). Node 24.19.0 en `C:\Users\Emmanuel G\AppData\Local\Programs\node24`; puertas con `. tools/agentic/use-node24.ps1` y `pnpm.CMD` absoluto. PG17 portable en `.cache/postgres-local/pgsql/bin`.
+- **Ola 0:** PRs #73 (líder de sync), #74 (purga/rotación), #75 (banner mobile), #76 (aserciones visuales), #77 (P3 de sync) con CI verde; revisión dsh en curso. `m3-dom-units` done; `m3-sql-catalog` en reintento.
+- **Hallazgos operativos:** (1) los workers dsh agotan turno (~20 pasos) sin emitir informe aunque el código queda completo; el orquestador re-ejecuta puertas y esa es la evidencia. (2) El sandbox de opencode **rechaza rutas fuera del worktree**: los briefs deben usar `git show` y nunca rutas absolutas del repo principal ni `.cache`. (3) El local `main` estaba 3 commits atrás de `origin/main`; se corrigió y las ramas se rebasan sobre `origin/main`.
+- **Siguiente acción mínima:** corregir P1 de la revisión de #74, reintentar `m3-sql-catalog` (sin PG en el worker) y mergear #73–#77 en cola serial.
+
+## plan-deepseek-fases-3-8 — 2026-11-25 (plan, nivel D)
+
+- **Plan:** `docs/plans/plan-deepseek-fases-3-8.md`: Ola 0 (cierre M1/M2 y P2 offline), M3 Inventario → M7 Expansión, por olas con ids, rutas, dependencias y ETA; carriles de un solo escritor; revisión cruzada dsh (dos focos en nivel A); verificación visual con aserciones Playwright; paquete de verificación humana final.
+
+
+
 ## Cierre de jornada 2026-11-23 — Fase 3 offline (M2) y cierre v1.0
 
 - **Integrado en main hoy (PR squash, CI Verify + PostgreSQL + Playwright verdes):** impresion Bluetooth (#42), tests mobile G-01..G-13 (#46), ocupacion de mesas/envio a cocina mobile (#47), fix SQL `confirm_capture_draft_v3` sobre pizza v2 (#49), rate limits del login (#50), conflictos multi-dispositivo (#53), barra y vista `/app/sync` web (#54), ledger de sync + `POST /sync/push` (#56-#60), almacen offline web cifrado + transporte (#62), operacion offline POS web con efectivo, KDS cache IndexedDB (#63/#67), almacen mobile cifrado (#66), banner y cola mobile, pull por cursor + revision manual (#65), puente runtime web real (#70, nivel A), pruebas HTTP+PG17 de conflictos (#71). Docs de deuda #61/#64/#68/#72.
