@@ -1439,7 +1439,7 @@
                                    "m3-sql-purchasing",
                                    "m3-map-sale-hooks"
                                ],
-                      "status":  "review",
+                      "status":  "done",
                       "id":  "m3-sql-sale-consumption",
                       "title":  "Consumo por venta y reverso idempotentes",
                       "level":  "A",
@@ -1501,13 +1501,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-movements",
                       "title":  "API de movimientos manuales con supervisor y motivo",
                       "level":  "A",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #99 fusionado: transferencia atomica con lock, ajuste/merma/conteo, listados de movimientos/saldos; revision A con P2 corregidos."
                   },
                   {
                       "attempts":  0,
@@ -1521,13 +1522,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-recipes",
                       "title":  "API de recetas",
                       "level":  "B",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #100: publicar/listar/leer recetas versionadas; P2 de doble transaccion corregido devolviendo la version publicada."
                   },
                   {
                       "attempts":  0,
@@ -1581,13 +1583,14 @@
                       "deps":  [
                                    "m3-api-wire"
                                ],
-                      "status":  "todo",
+                      "status":  "in_progress",
                       "id":  "m3-web-inventario",
                       "title":  "UI web de inventario (insumos, movimientos, conteo, recetas, compras, alertas)",
                       "level":  "C",
                       "paths":  [
                                     "apps/web/src/app/app/inventario"
-                                ]
+                                ],
+                      "note":  "PR #99: pestanas Insumos/Almacenes con alta/edicion y P2/P3 de la revision corregidos. Faltan movimientos, conteo, recetas, compras y alertas, mas la verificacion visual real."
                   },
                   {
                       "attempts":  0,

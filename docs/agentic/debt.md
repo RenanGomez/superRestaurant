@@ -147,4 +147,14 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - **P3 (revision m3-rev-funciones-api):** el caso "foreign restaurant" de `items.test.ts` simula una fila que `read_*_for_manage` nunca devuelve a un no-miembro; en la BD real esa via da 404, no 403. Ajustar el test al comportamiento SQL (cubierto en `inventory_api_functions_invariants.sql`).
 - **P3 (revision m3-rev-funciones-sql):** `list_inventory_*` exige membresia activa pero no `catalog.read`; el API lo frena antes. Si se expone otro consumidor, mover la matriz RBAC a SQL.
 - **P3 (revision m3-rev-funciones-sql):** faltan aserciones `pg_proc` (`prosecdef`/`proowner`/`proconfig`) y casos de `update` para cashier y actor sin membresia en la prueba SQL de las funciones.
-- **P2 pendiente (compras):** `app_private.inventory_record_movement` conserva `EXECUTE` para `app_api`; hoy solo lo usan las funciones de recepcion. Al construir `m3-api-movements`, retirar el grant y exponer wrappers por operacion (ajustando `inventory_ledger_invariants.sql`).
+- **P2 pendiente (compras):** `app_private.inventory_record_movement` conserva `EXECUTE` para `app_api`; hoy solo lo usan las funciones de recepcion. Al construir los wrappers por operación, retirar el grant y ajustar `inventory_ledger_invariants.sql`.
+
+## M3 inventario — P3 de la ola movimientos/recetas/UI (2026-11-25)
+
+- **P3 (movimientos):** `x-device-id` lo manda el cliente y se persiste como `device_id` sin comprobar que pertenezca al actor/sucursal (el actor sí es del servidor). Validarlo contra el registro de dispositivos cuando exista.
+- **P3 (movimientos):** `transfer_out` puede dejar el almacén origen en negativo; no hay guarda de saldo no negativo. Decidir la política (bloquear o alertar) antes de la UI de conteo.
+- **P3 (recetas):** `list_inventory_recipes` no filtra por `modifier_id`; el cliente debe filtrar por el campo devuelto.
+- **P3 (recetas):** el parser acepta ULID y cantidades sin tope, mientras el SQL exige UUID y ≤9 dígitos; termina en 400, no en fuga, pero conviene alinear.
+- **P3 (recetas):** las lecturas no validan sucursal activa como el publicador, y la prueba no ejercita concurrencia (la unicidad activa descansa en el advisory lock del publicador).
+- **P3 (UI inventario):** no existe helper de `inert`/`aria-hidden` de shell; el diálogo solo atrapa foco y cierra con Escape. Añadirlo cuando se unifique el patrón de diálogos.
+- **P3 (API):** `items.module.ts` quedó huérfano tras montar `ItemsController`/`ItemsService` en `AppModule`; borrarlo o unificar el patrón de módulos.
