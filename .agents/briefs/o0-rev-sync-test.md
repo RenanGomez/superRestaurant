@@ -6,13 +6,13 @@
 - Si necesitas ejecutar codigo de la rama, copia los archivos con `git show` a `.harness/state/tmp/o0-rev-sync-test/` y ejecutalos ahi. No modifiques archivos del repo.
 - No encadenes comandos largos: un comando por paso, como maximo 10 pasos.
 
-Diff: 182fbb6c...harness/o0-sync-p3
+Diff: origin/main...harness/o0-sync-p3
 
 ## Objetivo
 Foco 2 - pruebas adversariales: por cada invariante que el autor afirma, comprueba que hay una prueba que falla si se rompe. Escribe y EJECUTA al menos una prueba adversarial propia (doble envio, perdida de liderazgo, revocacion, AAD de otro scope, timeout) y pega la salida real. Una afirmacion sin prueba ejecutable es P1.
 
 ## Que revisar
-1. Lee el diff adjunto (rango `182fbb6c...harness/o0-sync-p3`). Solo los archivos del diff y sus consumidores directos (con `git show`).
+1. Lee el diff adjunto (rango `origin/main...harness/o0-sync-p3`). Solo los archivos del diff y sus consumidores directos (con `git show`).
 2. Contrasta con `.agents/briefs/o0-sync-p3.md`.
 3. Si necesitas correr algo, una sola ejecucion acotada en `.harness/state/tmp/o0-rev-sync-test/`.
 

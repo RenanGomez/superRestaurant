@@ -1,11 +1,24 @@
-## Ola 0 — arranque del loop solo-dsh — 2026-11-25 (nivel D, orquestador)
+## Cierre de sesion 2026-11-25 (nivel D, orquestador) — parada por contexto
 
-- **Instrucción de Emmanuel:** ejecutar `docs/plans/plan-deepseek-fases-3-8.md` de principio a fin, autónomo, con **solo workers DeepSeek (dsh)** en paralelo; sin codex, agy, AO ni subagentes Claude como escritores. Registrado en `DECISIONS_PENDING.md`.
-- **Estado verificado en git:** `main` real `3f8b3570` (PR #72), 0 PRs abiertos al arrancar. M1 y M2 fusionados salvo signoff, P2/P3 de Ola 0 y 5 migraciones remotas sin aplicar. `backlog.json` reconciliado: 45 ítems.
-- **Pipeline:** `opencode` 1.19.6 + `OPENCODE_API_KEY` (provider `opencodego`, alias `default` → `deepseek-v4.1-flash`). Node 24.19.0 en `C:\Users\Emmanuel G\AppData\Local\Programs\node24`; puertas con `. tools/agentic/use-node24.ps1` y `pnpm.CMD` absoluto. PG17 portable en `.cache/postgres-local/pgsql/bin`.
-- **Ola 0:** PRs #73 (líder de sync), #74 (purga/rotación), #75 (banner mobile), #76 (aserciones visuales), #77 (P3 de sync) con CI verde; revisión dsh en curso. `m3-dom-units` done; `m3-sql-catalog` en reintento.
-- **Hallazgos operativos:** (1) los workers dsh agotan turno (~20 pasos) sin emitir informe aunque el código queda completo; el orquestador re-ejecuta puertas y esa es la evidencia. (2) El sandbox de opencode **rechaza rutas fuera del worktree**: los briefs deben usar `git show` y nunca rutas absolutas del repo principal ni `.cache`. (3) El local `main` estaba 3 commits atrás de `origin/main`; se corrigió y las ramas se rebasan sobre `origin/main`.
-- **Siguiente acción mínima:** corregir P1 de la revisión de #74, reintentar `m3-sql-catalog` (sin PG en el worker) y mergear #73–#77 en cola serial.
+- **Fusionado en `main` durante la sesion:** 17 PRs (#73-#89). Ola 0 completa, M2 cerrado formalmente (`docs/agentic/m2-offline-signoff.md`), dominio de inventario completo (unidades, ledger, costo, recetas), contratos de inventario, catalogo/ledger/recetas SQL y API de insumos y almacenes.
+- **Abierto con P1:** #90 API de insumos (faltan grants de `app_api` en el catalogo; DML directo devolveria 42501) y #91 compras SQL (falta idempotencia de creacion de OC y pruebas de dinero/auditoria). Detalle en `debt.md` y `docs/agentic/entrega-final-2026-11-25.md`.
+- **Verificacion PG del orquestador:** catalogo 78, ledger 79, recetas 80 y compras 80 migraciones desde cero con `inventory_schema_rollback` en verde y cleanup detenido.
+- **Decisiones nuevas:** (1) workers dsh no ejecutan PG ni salen del worktree; el orquestador corre esas puertas; (2) conflictos de rebase en archivos ajenos se resuelven tomando `main`; (3) XDG_DATA_HOME por run en `agent.ps1` para evitar que las sesiones de OpenCode se mezclen entre proyectos; (4) migraciones de inventario pendientes de aplicar en remoto con el flujo 19.6.
+- **Siguiente accion minima:** crear `m3-api-grants` (conceder DML a `app_api` o exponer funciones `app_private`), corregir la idempotencia de compras, y lanzar `m3-sql-sale-consumption` + `m3-api-wire` + UI de inventario. Todo el contexto de retomada esta en `docs/agentic/entrega-final-2026-11-25.md`.
+- **Sin cambios visibles para el operador:** no se regenero el smoke HTML (`docs/smoke/`) porque no hubo cambios de UI desplegables en esta sesion.
+
+
+- **Fusionado:** Ola 0 completa (#73–#79, #85 cableado) y dominio de inventario (#80 unidades, #82 ledger, #83 recetas, #84 costo promedio) más catálogo SQL (#81). `m3-dom-wire` en curso.
+- **Verificación PG del orquestador:** catálogo 78 migraciones ok; ledger SQL 79 migraciones ok (invariantes del ledger en verde).
+- **Decisiones nuevas registradas:** (1) los revisores dsh no ejecutan PG ni salen del repo; el orquestador corre esas puertas y lo anota; (2) conflictos de rebase en archivos ajenos se resuelven tomando `main`; (3) tres PR de dominio se fusionaron con CI disparado por reapertura del PR (GitHub no disparó en el push); (4) `packages/domain` ya registra las cuatro suites vía `m3-dom-wire`.
+- **Pendiente inmediato:** revisiones del ledger SQL (#86), `m3-dom-wire`, recetas SQL, compras SQL, consumo por venta SQL, contratos, API y UI de inventario.
+
+
+## Ola 0 - arranque del loop solo-dsh - 2026-11-25 (nivel D, orquestador)
+- **Hallazgo importante:** las revisiones dsh detectaron P1 reales heredados de #70 en el puente offline (`web-sync-bridge.ts`): ids de entidad inválidos, payloads no soportados reportados como `committed`, y registro de dispositivo nunca invocado; además el `deviceId` de navegador atado al actor rompía el cambio de turno. Tareas creadas: `o0-sync-devices` (hecha, PR #79), `o0-devices-fix`, `o0-bridge-p1` (pendiente), `o0-purge-fix`.
+- **Operación:** `drain.ps1` se detiene en el primer `unverified`; por eso cada lote se relanza tras revisar. Los revisores dsh no pueden usar rutas fuera del repo (sandbox): sus briefs leen con `git show` y ejecutan en `.harness/state/tmp`.
+- **Siguiente acción mínima:** verificar PG del catálogo de inventario, cerrar las correcciones de purga y dispositivo, y cablear `o0-wire`.
+
 
 ## plan-deepseek-fases-3-8 — 2026-11-25 (plan, nivel D)
 

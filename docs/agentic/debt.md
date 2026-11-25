@@ -121,3 +121,23 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 
 - P2: `two_devices_add_lines` solo prueba el ledger (el total lo calcula el test, no el servidor); `cancel_vs_kds_preparing` solo prueba monotonia de version (renombrar o probar cancelacion real); `concurrent_same_line_edit` sin dos dispositivos con `baseVersion` divergente; ningun push HTTP produce `manual_review` (se abre con SQL directo); la prueba `test:sync-conflicts:local` no esta enganchada a CI/pg-verify.
 - P3: `assertSyncConflictScenariosCovered` depende de `cover()` autodeclarado; tautologia en tombstone 11f; 11e prueba aislamiento con tipo no soportado; `SYNC_CURSOR_SECRET` del test vacuo y sobrescrito; `bootstrapTransactionalHttpApp` duplica `bootstrapHttpApp`.
+
+## Ola 0 solo-dsh (2026-11-25) â€” P2/P3 de revisiÃ³n cruzada dsh
+
+- #73 o0-web-leader (A): P2 el seguidor de `acquireSyncLeader` espera sin timeout; P2 la prueba no estÃ¡ registrada en `apps/web/package.json` (lo hace `o0-wire`); P2 `acquireSyncLeader` aÃºn no tiene consumidor productivo (debe conectarlo `o0-wire` en `offline-runtime-mount.tsx`); P3 `onLost` tambiÃ©n se dispara en liberaciÃ³n voluntaria y no estÃ¡ documentado; P3 el fake de pÃ©rdida modela un modo que Web Locks real no produce sin `signal`.
+- #75 o0-mobile-banner-tests (B): P2 la suite no estÃ¡ en `apps/mobile/package.json` (lo hace `o0-wire`); P2 falta la carrera `openRuntime` resuelto despuÃ©s de `stop()` verificando `onDiscard`; P3 rama inalcanzable en `sync-banner-lifecycle.ts:88`.
+- #76 o0-visual-assert (C): P2 `offline-kds.spec.ts` no usa `expectFinalRoute` y una redirecciÃ³n a `/app` puede dejarlo verde; P3 el helper cuenta 404/501 de `/api/sync/*` como fallo de red (backend no desplegado); P3 `accessibleName` no considera `img alt`; P3 doble `mkdirSync`; P3 las reglas de consola/red/diÃ¡logos solo tienen caso que falla.
+- #77 o0-sync-p3 (B): pendiente de la revisiÃ³n de pruebas; los P1 detectados por su revisiÃ³n son del puente offline y se atacan en `o0-sync-devices` y `o0-bridge-p1`.
+- Puente offline (P1 heredados de #70, detectados por las revisiones de la Ola 0): ids de entidad con nibbles de versiÃ³n/variante invÃ¡lidos, payloads `order_add_line`/`cash_collect` no soportados reportados como `committed`, y ausencia de `POST /sync/devices`. Tareas creadas: `o0-sync-devices` (A) y `o0-bridge-p1` (A).
+
+
+## M3 inventario â€” P1/P2 abiertos al cierre de la sesiÃ³n 2026-11-25
+
+- **API de insumos (#90) P1:** `items.service.ts` hace DML directo como `app_api`, pero `20261126000100_inventory_catalog.sql` revoca todo a `app_api` y solo concede SELECT a `authenticated`: todo GET/POST/PATCH fallarÃ­a con 42501 y el catch lo devuelve como 503. Falta una migraciÃ³n de grants para `app_api` (o funciones `app_private`) y pruebas con privilegios reales.
+- **API de insumos P2:** solo 23505 se mapea a 409; 23514/23503 caen en 503; el lÃ­mite de `name` del contrato (200) no coincide con el check de la tabla (160).
+- **Compras SQL (#91) P1:** `inventory_create_purchase_order` no es idempotente (sin `idempotencyKey`, id en servidor): un reintento crea otra OC y al recibir ambas duplica stock/costo. AÃ±adir idempotency key y dedupe.
+- **Compras SQL P1:** faltan pruebas de importe/moneda invÃ¡lidos, de proveedor de otro restaurante y de auditorÃ­a (actor/device) en la recepciÃ³n; `received_by` no existe.
+- **Compras SQL P2:** `app_api` conserva EXECUTE en `inventory_record_movement` y podrÃ­a insertar un `receipt` sin pasar por la recepciÃ³n (y bloquear la legÃ­tima por el Ãºnico de source).
+- **Ledger SQL (#86, fusionado) P3:** un `source_id` duplicado con clave nueva escapa como 23505 crudo; el API deberÃ¡ mapearlo.
+- **Contratos (#88, fusionado):** `node-test-shims.d.ts` quedÃ³ en `tsconfig.json` de build; mover a test-only si molesta con `@types/node`.
+
