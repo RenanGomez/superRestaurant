@@ -19,7 +19,7 @@ import {
 } from "../../../lib/memberships";
 import { createServerSupabaseClient } from "../../../lib/supabase-server";
 
-export type InventoryError = "conflict" | "denied" | "invalid" | "missing" | "unavailable";
+export type InventoryError = "conflict" | "denied" | "invalid" | "missing" | "timeout" | "unauthenticated" | "unavailable";
 
 export type InventoryOperation =
   | "createItem"
@@ -283,14 +283,16 @@ async function send(
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       method,
+      signal: AbortSignal.timeout(10_000),
     };
     if (body !== undefined) init.body = JSON.stringify(body);
     response = await fetch(url, init);
-  } catch {
-    return unavailable();
+  } catch (error) {
+    return requestTimedOut(error) ? timedOut() : unavailable();
   }
   if (response.status === 400) return invalid();
-  if (response.status === 401 || response.status === 403) return denied();
+  if (response.status === 401) return unauthenticated();
+  if (response.status === 403) return denied();
   if (response.status === 404) return { ok: false, error: "missing" };
   if (response.status === 409) return { ok: false, error: "conflict" };
   if (!response.ok) return unavailable();
@@ -343,12 +345,25 @@ function isInventoryUnit(value: unknown): value is InventoryUnitV1 {
   return typeof value === "string" && (INVENTORY_UNITS as readonly string[]).includes(value);
 }
 
+function requestTimedOut(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error
+    && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
 function invalid(): { readonly ok: false; readonly error: InventoryError } {
   return { error: "invalid", ok: false };
 }
 
 function denied(): { readonly ok: false; readonly error: InventoryError } {
   return { error: "denied", ok: false };
+}
+
+function unauthenticated(): { readonly ok: false; readonly error: InventoryError } {
+  return { error: "unauthenticated", ok: false };
+}
+
+function timedOut(): { readonly ok: false; readonly error: InventoryError } {
+  return { error: "timeout", ok: false };
 }
 
 function unavailable(): { readonly ok: false; readonly error: InventoryError } {

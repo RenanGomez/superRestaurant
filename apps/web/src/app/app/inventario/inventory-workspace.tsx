@@ -1,6 +1,7 @@
 "use client";
 
 import type { InventoryItemV1, InventoryWarehouseV1 } from "@super-restaurant/shared-types";
+import { INVENTORY_UNITS } from "@super-restaurant/shared-types";
 import {
   useEffect,
   useId,
@@ -36,6 +37,8 @@ const LIST_ERRORS: Readonly<Record<InventoryError, string>> = {
   denied: "Tu sesión o rol ya no permite consultar el inventario.",
   invalid: "No se pudo leer la solicitud. Actualiza la página e inténtalo de nuevo.",
   missing: "El registro ya no existe. Actualiza la lista.",
+  timeout: "El servidor tardó demasiado. Reintenta.",
+  unauthenticated: "Tu sesión expiró. Vuelve a iniciar sesión.",
   unavailable: "No se pudo conectar con el inventario. Revisa la conexión e inténtalo de nuevo.",
 };
 
@@ -44,6 +47,8 @@ const SAVE_ERRORS: Readonly<Record<InventoryError, string>> = {
   denied: "Tu rol ya no permite modificar el inventario.",
   invalid: "Revisa los datos del formulario e inténtalo de nuevo.",
   missing: "El registro ya no existe. Cierra el diálogo y actualiza la lista.",
+  timeout: "El servidor tardó demasiado. Reintenta.",
+  unauthenticated: "Tu sesión expiró. Vuelve a iniciar sesión.",
   unavailable: "No se pudo guardar. Revisa la conexión e inténtalo de nuevo.",
 };
 
@@ -478,7 +483,7 @@ function ItemDialog({ action, item, onClose, onSaved }: {
     if (sku.length > 100) { setError("La clave interna no puede pasar de 100 caracteres."); return; }
     if (factor === undefined) { setError("El factor de compra debe ser un entero mayor o igual a 1."); return; }
     if (minimum === undefined) { setError("El mínimo debe ser un entero mayor o igual a 0."); return; }
-    if (!editing && !["g", "ml", "piece"].includes(unitValue)) { setError("Elige la unidad base del insumo."); return; }
+    if (!editing && !(INVENTORY_UNITS as readonly string[]).includes(unitValue)) { setError("Elige la unidad base del insumo."); return; }
 
     setError(undefined);
     setSaving(true);
@@ -520,9 +525,9 @@ function ItemDialog({ action, item, onClose, onSaved }: {
           <Field className="grid gap-1 text-sm" hint="Unidad base con la que se descuenta el inventario." label="Unidad base">
             {(id) => (
               <select id={id} name="unitCode" className={inputClass} defaultValue="g" disabled={saving}>
-                <option value="g">gramos</option>
-                <option value="ml">mililitros</option>
-                <option value="piece">pieza</option>
+                {INVENTORY_UNITS.map((unit) => (
+                  <option key={unit} value={unit}>{inventoryUnitLabel(unit)}</option>
+                ))}
               </select>
             )}
           </Field>
