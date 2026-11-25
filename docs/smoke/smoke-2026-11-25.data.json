@@ -1,0 +1,85 @@
+{
+  "sub": "Ronda 2026-11-25: migraciones de desarrollo aplicadas. Lo aplicado esta verificado en base de datos (postcheck y dry-run), pero NADA nuevo se ha probado aun en navegador ni con dispositivos reales.",
+  "sections": [
+    {
+      "t": "0. Preparacion",
+      "items": [
+        {
+          "id": "m-prep",
+          "h": "Levantar servidores y sesion E2E",
+          "s": [
+            "Ejecuta start-local.bat",
+            "Inicia sesion con toolsagenticlocal-serverse2e-auth.bat",
+            "Abre la consola (F12)"
+          ],
+          "e": "Web y API arriba, consola sin errores rojos.",
+          "block": "El API debe reconstruirse y reiniciarse para tomar el esquema nuevo. Define SYNC_CURSOR_SECRET (>=32) en el runtime antes de probar sync; no lo pegues en el chat."
+        }
+      ]
+    },
+    {
+      "t": "1. Migraciones aplicadas en dev (verificado en base de datos)",
+      "items": [
+        {
+          "id": "m-history",
+          "h": "Historial remoto al dia",
+          "s": [
+            "Ejecuta el preflight en solo lectura contra el proyecto de desarrollo"
+          ],
+          "e": "lastRemote = 20261126000300, sin faltantes ni duplicados y segundo dry-run upToDate.",
+          "checked": true
+        },
+        {
+          "id": "m-catalog",
+          "h": "Catalogo y privilegios",
+          "s": [
+            "Revisa el postcheck: 65 tablas aseguradas, 11 politicas, 128 funciones SECURITY DEFINER",
+            "Confirma EXECUTE de app_api en las funciones de sync e inventario"
+          ],
+          "e": "app_api: true, authenticated: false, owner: true en las funciones verificadas; ninguna tabla de app sin RLS.",
+          "checked": true
+        }
+      ]
+    },
+    {
+      "t": "2. Pendiente de probar en navegador",
+      "items": [
+        {
+          "id": "m-sync-ui",
+          "h": "Sync web con esquema nuevo",
+          "s": [
+            "Entra a /app/sync y fuerza un ciclo de sincronizacion",
+            "Revisa la cola y la revision manual de supervisores"
+          ],
+          "e": "La API responde sin 5xx y la cola muestra el estado real."
+        },
+        {
+          "id": "m-inventory-ui",
+          "h": "Inventario cuando llegue su UI/API",
+          "s": [
+            "Lista insumos, almacenes y movimientos"
+          ],
+          "e": "Lecturas por membresia/sucursal y escrituras solo por funciones; sin acceso directo indebido.",
+          "block": "La UI de inventario y los grants de app_api del catalogo (PR #90) aun no estan en main."
+        }
+      ]
+    }
+  ],
+  "r2": {},
+  "changes": [
+    {
+      "h": "13 migraciones aplicadas en el Supabase de desarrollo",
+      "p": "Pizza v2 y su probe, zonas/urbanizacion, fix de confirmacion pizza v2, sync (contacto, capturas abiertas, ledger, frontera API, confirmacion con cobertura, pull/review) e inventario (catalogo, ledger, recetas). Protocolo 19.6: probe local, sonda encadenada rollback-only, respaldo, dry-run exacto, apply unico, postcheck y segundo dry-run."
+    },
+    {
+      "h": "Excluida 20260908000100",
+      "p": "Sus objetos ya existen en el remoto aunque su fila no este en el historial. No se reaplico ni se edito el historial a mano; requiere una migracion idempotente nueva si se quiere reconciliar."
+    }
+  ],
+  "decisions": [
+    {
+      "h": "Staging",
+      "p": "No hay entorno de staging provisionado; el apply fue directo a desarrollo, que es el unico destino no productivo disponible. Queda como brecha del runbook de deploy."
+    }
+  ]
+}

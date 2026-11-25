@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smoke superRestaurant</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e2e0da;--ok:#1f7a4a;--fail:#b3261e;--skip:#8a6d1f;--pend:#5b5b5b;--acc:#2c5bd6}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#151514;--card:#1f1f1d;--ink:#eceae4;--mute:#a09e97;--line:#34332f;--ok:#5cc28c;--fail:#ff8a80;--skip:#e0c062;--pend:#b5b3ad;--acc:#8fb0ff}}
+:root[data-theme=dark]{--bg:#151514;--card:#1f1f1d;--ink:#eceae4;--mute:#a09e97;--line:#34332f;--ok:#5cc28c;--fail:#ff8a80;--skip:#e0c062;--pend:#b5b3ad;--acc:#8fb0ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:28px 0 10px}
+.sub{color:var(--mute);margin:0 0 16px}
+.bar{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.prog{flex:1 1 220px;height:10px;background:var(--line);border-radius:6px;overflow:hidden;display:flex}
+.prog i{display:block;height:100%}
+button,select,input[type=text]{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;min-height:40px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
+.tabs button[aria-selected=true]{background:var(--acc);color:#fff;border-color:var(--acc)}
+.item{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--pend);border-radius:10px;padding:12px 14px;margin:8px 0}
+.item[data-s=ok]{border-left-color:var(--ok)}.item[data-s=fail]{border-left-color:var(--fail)}.item[data-s=skip]{border-left-color:var(--skip)}
+.row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.row h3{flex:1 1 300px;font-size:.98rem;margin:0}
+.steps{margin:6px 0 8px 18px;padding:0;color:var(--ink)}.steps li{margin:2px 0}
+.exp{color:var(--mute);font-size:.9rem;margin:4px 0}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;min-height:36px;padding:6px 10px;font-size:.85rem}
+.seg button[aria-pressed=true][data-v=ok]{background:var(--ok);color:#fff}
+.seg button[aria-pressed=true][data-v=fail]{background:var(--fail);color:#fff}
+.seg button[aria-pressed=true][data-v=skip]{background:var(--skip);color:#fff}
+.seg button[aria-pressed=true][data-v=pend]{background:var(--pend);color:#fff}
+textarea{width:100%;min-height:54px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.tag{font-size:.75rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+.tag.block{border-color:var(--fail);color:var(--fail)}
+.chg{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
+.chg b{display:block}.chg p{margin:4px 0;color:var(--mute);font-size:.92rem}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:var(--line);padding:1px 5px;border-radius:4px}
+.r2{margin:12px 0 0;padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--bg)}
+.r2 h4{margin:10px 0 4px;font-size:.85rem;color:var(--acc);text-transform:uppercase;letter-spacing:.03em}.r2 h4:first-child{margin-top:0}
+.r2 ul{margin:4px 0 0 18px;padding:0}.r2 li{margin:4px 0;font-size:.92rem}.mut{color:var(--mute)}
+.st{font-size:.72rem;padding:1px 8px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}.st.hecho{border-color:var(--ok);color:var(--ok)}.st.accion{border-color:var(--skip);color:var(--skip)}
+.hidden{display:none}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>Smoke superRestaurant · 2026-11-25</h1>
+<p class="sub">Ronda 2026-11-25: migraciones de desarrollo aplicadas. Lo aplicado esta verificado en base de datos (postcheck y dry-run), pero NADA nuevo se ha probado aun en navegador ni con dispositivos reales.</p>
+
+<div class="bar">
+  <div class="prog" id="prog" aria-label="Progreso"></div>
+  <span id="count"></span>
+  <select id="filter" aria-label="Filtrar por estado">
+    <option value="all">Todos</option><option value="pend">Pendientes</option><option value="ok">OK</option><option value="fail">Falla</option><option value="skip">Omitido</option>
+  </select>
+  <button id="export">Exportar</button>
+  <button id="import">Importar</button>
+  <button id="reset">Reiniciar</button>
+  <button id="theme" aria-label="Cambiar tema">◐</button>
+</div>
+
+<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="smoke">Pruebas</button>
+  <button role="tab" aria-selected="false" data-tab="changes">Cambios recientes</button>
+  <button role="tab" aria-selected="false" data-tab="decisions">Decisiones pendientes</button>
+</div>
+
+<section id="smoke"></section>
+<section id="changes" class="hidden"></section>
+<section id="decisions" class="hidden"></section>
+</main>
+<div id="toast" role="status"></div>
+<input type="file" id="file" accept="application/json" class="hidden">
+
+<script>
+const KEY = "sr-smoke-2026-11-25";
+const SECTIONS = [{"t":"0. Preparacion","items":[{"id":"m-prep","h":"Levantar servidores y sesion E2E","s":["Ejecuta start-local.bat","Inicia sesion con toolsagenticlocal-serverse2e-auth.bat","Abre la consola (F12)"],"e":"Web y API arriba, consola sin errores rojos.","block":"El API debe reconstruirse y reiniciarse para tomar el esquema nuevo. Define SYNC_CURSOR_SECRET (>=32) en el runtime antes de probar sync; no lo pegues en el chat."}]},{"t":"1. Migraciones aplicadas en dev (verificado en base de datos)","items":[{"id":"m-history","h":"Historial remoto al dia","s":["Ejecuta el preflight en solo lectura contra el proyecto de desarrollo"],"e":"lastRemote = 20261126000300, sin faltantes ni duplicados y segundo dry-run upToDate.","checked":true},{"id":"m-catalog","h":"Catalogo y privilegios","s":["Revisa el postcheck: 65 tablas aseguradas, 11 politicas, 128 funciones SECURITY DEFINER","Confirma EXECUTE de app_api en las funciones de sync e inventario"],"e":"app_api: true, authenticated: false, owner: true en las funciones verificadas; ninguna tabla de app sin RLS.","checked":true}]},{"t":"2. Pendiente de probar en navegador","items":[{"id":"m-sync-ui","h":"Sync web con esquema nuevo","s":["Entra a /app/sync y fuerza un ciclo de sincronizacion","Revisa la cola y la revision manual de supervisores"],"e":"La API responde sin 5xx y la cola muestra el estado real."},{"id":"m-inventory-ui","h":"Inventario cuando llegue su UI/API","s":["Lista insumos, almacenes y movimientos"],"e":"Lecturas por membresia/sucursal y escrituras solo por funciones; sin acceso directo indebido.","block":"La UI de inventario y los grants de app_api del catalogo (PR #90) aun no estan en main."}]}];
+const R2 = {};
+const STL = {hecho:"Hecho", accion:"Acción tuya"};
+const CHANGES = [{"h":"13 migraciones aplicadas en el Supabase de desarrollo","p":"Pizza v2 y su probe, zonas/urbanizacion, fix de confirmacion pizza v2, sync (contacto, capturas abiertas, ledger, frontera API, confirmacion con cobertura, pull/review) e inventario (catalogo, ledger, recetas). Protocolo 19.6: probe local, sonda encadenada rollback-only, respaldo, dry-run exacto, apply unico, postcheck y segundo dry-run."},{"h":"Excluida 20260908000100","p":"Sus objetos ya existen en el remoto aunque su fila no este en el historial. No se reaplico ni se edito el historial a mano; requiere una migracion idempotente nueva si se quiere reconciliar."}];
+const DECISIONS = [{"h":"Staging","p":"No hay entorno de staging provisionado; el apply fue directo a desarrollo, que es el unico destino no productivo disponible. Queda como brecha del runbook de deploy."}];
+const r2html = id => { const r = R2[id]; if (!r) return "";
+  return `<div class="r2"><h4>Cambios realizados</h4><ul>${r.c.map(x => `<li><b>${esc(x[0])}</b> <span class="st ${x[1]}">${STL[x[1]]}</span><br><span class="mut">${esc(x[2])}</span></li>`).join("")}</ul>
+  <h4>Nuevo smoke sugerido</h4><ol class="steps">${r.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol><p class="exp"><b>Esperado:</b> ${esc(r.e)}</p>
+  <h4>Nuevo feedback</h4><textarea data-note="r2-${id}" placeholder="Nuevo feedback de esta ronda: qué viste, qué falta, qué cambiarías">${esc(state["r2-"+id]?.n || "")}</textarea></div>`; };
+const LABELS = {pend:"Pendiente", ok:"OK", fail:"Falla", skip:"Omitido"};
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const all = () => SECTIONS.flatMap(s => s.items);
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render() {
+  const f = document.getElementById("filter").value;
+  document.getElementById("smoke").innerHTML = SECTIONS.map(sec => {
+    const items = sec.items.filter(it => f === "all" || (state[it.id]?.s || "pend") === f);
+    if (!items.length) return "";
+    return `<h2>${esc(sec.t)}</h2>` + items.map(it => {
+      const st = state[it.id]?.s || "pend", note = state[it.id]?.n || "";
+      return `<div class="item" data-s="${st}"><div class="row"><h3>${esc(it.h)}</h3>${it.block ? '<span class="tag block">Bloqueado</span>' : ""}
+        <div class="seg" role="group" aria-label="Estado">${Object.keys(LABELS).map(v => `<button data-id="${it.id}" data-v="${v}" aria-pressed="${st === v}">${LABELS[v]}</button>`).join("")}</div></div>
+        <ol class="steps">${it.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+        <p class="exp"><b>Esperado:</b> ${esc(it.e)}</p>${it.block ? `<p class="exp"><b>Bloqueo:</b> ${esc(it.block)}</p>` : ""}
+        <textarea data-note="${it.id}" placeholder="Notas: qué hiciste, qué esperabas, qué viste">${esc(note)}</textarea>${r2html(it.id)}</div>`;
+    }).join("");
+  }).join("");
+  const counts = {pend:0, ok:0, fail:0, skip:0};
+  all().forEach(it => counts[state[it.id]?.s || "pend"]++);
+  const n = all().length;
+  document.getElementById("count").textContent = `${counts.ok} OK · ${counts.fail} falla · ${counts.skip} omitido · ${counts.pend} pendiente`;
+  document.getElementById("prog").innerHTML = ["ok","fail","skip"].map(k => `<i style="width:${counts[k]/n*100}%;background:var(--${k})"></i>`).join("");
+}
+document.getElementById("changes").innerHTML = CHANGES.map(c => `<div class="chg"><b>${esc(c.h)}</b><p>${esc(c.p)}</p></div>`).join("");
+document.getElementById("decisions").innerHTML = DECISIONS.map((c, i) => `<div class="chg"><b>${esc(c.h)}</b><p>${esc(c.p)}</p><textarea data-note="dec-${i}" placeholder="Tu respuesta">${esc(state["dec-"+i]?.n || "")}</textarea></div>`).join("");
+
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-v]");
+  if (b) { state[b.dataset.id] = {...state[b.dataset.id], s: b.dataset.v, t: new Date().toISOString()}; save(); render(); }
+  const tab = ev.target.closest("[role=tab]");
+  if (tab) {
+    document.querySelectorAll("[role=tab]").forEach(x => x.setAttribute("aria-selected", x === tab));
+    ["smoke","changes","decisions"].forEach(id => document.getElementById(id).classList.toggle("hidden", id !== tab.dataset.tab));
+  }
+});
+document.addEventListener("input", ev => {
+  const id = ev.target.dataset.note;
+  if (id) { state[id] = {...state[id], n: ev.target.value}; save(); }
+});
+document.getElementById("filter").onchange = render;
+function toast(m) { const t = document.getElementById("toast"); t.textContent = m; t.style.opacity = 1; setTimeout(() => t.style.opacity = 0, 1800); }
+document.getElementById("export").onclick = async () => {
+  const lines = ["# Resultado smoke 2026-11-25", ""];
+  SECTIONS.forEach(sec => { lines.push("## " + sec.t); sec.items.forEach(it => {
+    const s = state[it.id]?.s || "pend"; lines.push(`- [${LABELS[s]}] ${it.h}${state[it.id]?.n ? " — " + state[it.id].n.replace(/\n/g, " ") : ""}`); if (state["r2-"+it.id]?.n) lines.push(`  - Nuevo feedback: ${state["r2-"+it.id].n.replace(/\n/g, " ")}`); }); lines.push(""); });
+  lines.push("## Decisiones"); DECISIONS.forEach((d, i) => lines.push(`- ${d.h}: ${state["dec-"+i]?.n || "(sin respuesta)"}`));
+  const md = lines.join("\n");
+  try { await navigator.clipboard.writeText(md); toast("Copiado al portapapeles"); } catch (e) { toast("No se pudo copiar"); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], {type: "application/json"}));
+  a.download = "smoke-2026-11-25.json"; a.click();
+};
+document.getElementById("import").onclick = () => document.getElementById("file").click();
+document.getElementById("file").onchange = async ev => {
+  try { state = JSON.parse(await ev.target.files[0].text()); save(); render(); toast("Importado"); } catch (e) { toast("Archivo inválido"); }
+};
+document.getElementById("reset").onclick = () => {
+  const b = document.getElementById("reset");
+  if (b.dataset.armed) { state = {}; save(); render(); delete b.dataset.armed; b.textContent = "Reiniciar"; toast("Reiniciado"); }
+  else { b.dataset.armed = 1; b.textContent = "¿Seguro? Toca otra vez"; setTimeout(() => { delete b.dataset.armed; b.textContent = "Reiniciar"; }, 3000); }
+};
+document.getElementById("theme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+};
+render();
+</script>
+</body>
+</html>
