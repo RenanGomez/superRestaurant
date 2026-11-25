@@ -61,7 +61,7 @@
                   "enabled":  false
               },
     "queue":  {
-                  "maxParallel":  6,
+                  "maxParallel":  5,
                   "note":  "drain.ps1: runs simultáneos máximos. Codex y Antigravity pueden ir en paralelo; dos escritores nunca tocan las mismas rutas (-Files)."
               },
     "largeFiles":  {
