@@ -13,6 +13,7 @@ declare
   b uuid := gen_random_uuid(); b2 uuid := gen_random_uuid(); b3 uuid := gen_random_uuid();
   m uuid := gen_random_uuid();
   own_item uuid := gen_random_uuid(); foreign_item uuid := gen_random_uuid(); deleted_item uuid := gen_random_uuid();
+  hidden_item uuid := gen_random_uuid();
   own_warehouse uuid := gen_random_uuid(); other_branch_warehouse uuid := gen_random_uuid(); foreign_warehouse uuid := gen_random_uuid();
   visible bigint; tbl text;
 begin
@@ -25,10 +26,13 @@ begin
     ) then raise exception 'missing FORCE RLS: %', tbl; end if;
   end loop;
 
-  -- 5. No direct write privileges for clients or the API role.
+  -- 5. No direct write privileges for clients, the API role nor PUBLIC.
   foreach tbl in array array['inventory_items','inventory_warehouses'] loop
     if pg_catalog.has_table_privilege('authenticated', 'app.' || tbl, 'INSERT,UPDATE,DELETE,TRUNCATE')
       or pg_catalog.has_table_privilege('app_api', 'app.' || tbl, 'INSERT,UPDATE,DELETE,TRUNCATE')
+      or pg_catalog.has_table_privilege('anon', 'app.' || tbl, 'INSERT,UPDATE,DELETE,TRUNCATE')
+      or pg_catalog.has_table_privilege('service_role', 'app.' || tbl, 'INSERT,UPDATE,DELETE,TRUNCATE')
+      or pg_catalog.has_table_privilege('public', 'app.' || tbl, 'INSERT,UPDATE,DELETE,TRUNCATE')
     then raise exception 'direct write grant: %', tbl; end if;
   end loop;
 
@@ -58,14 +62,50 @@ begin
     insert into app.inventory_items(id,restaurant_id,name,unit_code,min_quantity) values (gen_random_uuid(), r, 'bad min', 'g', -1);
     raise exception 'negative min_quantity accepted';
   exception when check_violation then null; end;
+  begin
+    insert into app.inventory_items(id,restaurant_id,name,unit_code) values (gen_random_uuid(), r, '', 'g');
+    raise exception 'empty item name accepted';
+  exception when check_violation then null; end;
+  begin
+    insert into app.inventory_items(id,restaurant_id,name,unit_code) values (gen_random_uuid(), r, pg_catalog.repeat('a', 161), 'g');
+    raise exception 'overlong item name accepted';
+  exception when check_violation then null; end;
+  begin
+    insert into app.inventory_warehouses(id,restaurant_id,branch_id,name) values (gen_random_uuid(), r, b, '');
+    raise exception 'empty warehouse name accepted';
+  exception when check_violation then null; end;
+  begin
+    insert into app.inventory_warehouses(id,restaurant_id,branch_id,name) values (gen_random_uuid(), r, b, pg_catalog.repeat('a', 161));
+    raise exception 'overlong warehouse name accepted';
+  exception when check_violation then null; end;
 
   insert into app.inventory_items(id,restaurant_id,sku,name,unit_code) values
     (own_item, r, 'FLOUR', 'Flour', 'g'),
-    (foreign_item, r2, 'FLOUR', 'Foreign flour', 'g');
+    (foreign_item, r2, 'FLOUR', 'Foreign flour', 'g'),
+    (hidden_item, r, null, 'Hidden item', 'g');
+  update app.inventory_items set deleted_at = pg_catalog.clock_timestamp() where id = hidden_item;
   insert into app.inventory_warehouses(id,restaurant_id,branch_id,name) values
     (own_warehouse, r, b, 'Main'),
     (other_branch_warehouse, r, b3, 'Other branch'),
     (foreign_warehouse, r2, b2, 'Foreign');
+
+  -- 7. Active SKU is unique per restaurant, case-insensitively.
+  begin
+    insert into app.inventory_items(id,restaurant_id,sku,name,unit_code) values (gen_random_uuid(), r, 'flour', 'Duplicate flour', 'g');
+    raise exception 'duplicate active sku accepted';
+  exception when unique_violation then null; end;
+
+  -- 8. Composite FK rejects a warehouse whose branch belongs to another restaurant.
+  begin
+    insert into app.inventory_warehouses(id,restaurant_id,branch_id,name) values (gen_random_uuid(), r, b2, 'Cross tenant');
+    raise exception 'cross-tenant warehouse accepted';
+  exception when foreign_key_violation then null; end;
+
+  -- 9. Active warehouse name is unique per (restaurant, branch), case-insensitively.
+  begin
+    insert into app.inventory_warehouses(id,restaurant_id,branch_id,name) values (gen_random_uuid(), r, b, 'main');
+    raise exception 'duplicate active warehouse name accepted';
+  exception when unique_violation then null; end;
 
   -- 2 and 3. RLS isolates items by restaurant and warehouses by branch.
   perform pg_catalog.set_config('test.actor_id', actor::text, true);
@@ -74,6 +114,8 @@ begin
   if visible <> 1 then raise exception 'own item not visible'; end if;
   select count(*) into visible from app.inventory_items where id = foreign_item;
   if visible <> 0 then raise exception 'foreign item visible'; end if;
+  select count(*) into visible from app.inventory_items where id = hidden_item;
+  if visible <> 0 then raise exception 'deleted item visible'; end if;
   select count(*) into visible from app.inventory_warehouses where id = own_warehouse;
   if visible <> 1 then raise exception 'own warehouse not visible'; end if;
   select count(*) into visible from app.inventory_warehouses where id = other_branch_warehouse;
@@ -82,7 +124,9 @@ begin
   if visible <> 0 then raise exception 'foreign warehouse visible'; end if;
   execute 'reset role';
 
-  -- 6. A logically deleted item frees its SKU for reuse.
+  -- 6. A logically deleted item frees its SKU for reuse, case-insensitively.
+  update app.inventory_items set deleted_at = pg_catalog.clock_timestamp() where id = own_item;
+  insert into app.inventory_items(id,restaurant_id,sku,name,unit_code) values (gen_random_uuid(), r, 'flour', 'Flour again', 'g');
   insert into app.inventory_items(id,restaurant_id,sku,name,unit_code) values (deleted_item, r, 'SUGAR', 'Sugar', 'g');
   update app.inventory_items set deleted_at = pg_catalog.clock_timestamp() where id = deleted_item;
   insert into app.inventory_items(id,restaurant_id,sku,name,unit_code) values (gen_random_uuid(), r, 'SUGAR', 'Sugar again', 'g');
