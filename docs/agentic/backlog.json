@@ -1563,13 +1563,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-alerts-costing",
                       "title":  "API de alertas, costo promedio y margen",
                       "level":  "B",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #106: alertas por minimo, costo medio entero con resto, coste de receta y margen estimado; PG 88 migraciones y revision B APROBAR."
                   },
                   {
                       "attempts":  0,
