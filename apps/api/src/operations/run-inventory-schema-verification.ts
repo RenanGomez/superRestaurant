@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
-import { inventoryInvariantSql } from "./inventory-schema-verification.js";
+import { inventoryInvariantSql, inventoryLedgerInvariantSql } from "./inventory-schema-verification.js";
 
 const local = new LocalPostgres({ marker: "LOCAL_INVENTORY_SCHEMA_ONLY", databasePrefix: "superrestaurant_inventory", authUsersExtraColumns: ", raw_user_meta_data jsonb" });
 let stage = "configuration";
@@ -10,17 +10,24 @@ try {
   await local.start((next) => { stage = next; });
   const names = listMigrationNames();
   if (!names.includes("20261126000100_inventory_catalog.sql")) throw new Error("INVENTORY_MIGRATION_MISSING");
+  if (!names.includes("20261126000200_inventory_ledger.sql")) throw new Error("INVENTORY_LEDGER_MIGRATION_MISSING");
   stage = "migrations";
   await local.applyMigrations(names);
-  const summary = "select (select count(*) from app.inventory_items)::int as items, (select count(*) from app.inventory_warehouses)::int as warehouses, (select count(*)::int from pg_catalog.pg_policies where schemaname='app' and tablename in ('inventory_items','inventory_warehouses')) as policies";
+  const summary = "select (select count(*) from app.inventory_items)::int as items, (select count(*) from app.inventory_warehouses)::int as warehouses, (select count(*) from app.inventory_movements)::int as movements, (select count(*) from app.inventory_balances)::int as balances, (select count(*)::int from pg_catalog.pg_policies where schemaname='app' and tablename in ('inventory_items','inventory_warehouses','inventory_movements','inventory_balances')) as policies";
   const baseline = (await local.admin.query(summary)).rows[0];
   stage = "invariants";
-  await local.admin.query("BEGIN");
-  let invariantFailure: unknown;
-  try { await local.admin.query(inventoryInvariantSql()); } catch (error: unknown) { invariantFailure = error; } finally { await local.admin.query("ROLLBACK"); }
+  let invariantFailure: { readonly label: string; readonly error: unknown } | undefined;
+  const invariants: readonly (readonly [string, string])[] = [
+    ["catalog", inventoryInvariantSql()],
+    ["ledger", inventoryLedgerInvariantSql()],
+  ];
+  for (const [label, sql] of invariants) {
+    await local.admin.query("BEGIN");
+    try { await local.admin.query(sql); } catch (error: unknown) { invariantFailure ??= { label, error }; } finally { await local.admin.query("ROLLBACK"); }
+  }
   stage = "postcheck";
   assert.deepEqual((await local.admin.query(summary)).rows[0], baseline);
-  if (invariantFailure !== undefined) { stage = "invariants"; throw invariantFailure; }
+  if (invariantFailure !== undefined) { stage = `invariants:${invariantFailure.label}`; throw invariantFailure.error; }
   process.stdout.write(`${JSON.stringify({ stage: "inventory_schema_rollback", status: "ok", migrationsApplied: names.length, baseline })}\n`);
 } catch (error: unknown) {
   failed = true;
