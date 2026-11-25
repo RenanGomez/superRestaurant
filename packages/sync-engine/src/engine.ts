@@ -65,12 +65,19 @@ export interface DurableSyncStoragePort {
   persist(state: DurableSyncState): Promise<void>;
 }
 
+export interface SyncDeviceRegistrationRequest {
+  readonly deviceId: string;
+  readonly scope: BranchScope;
+}
+
 export interface SyncTransportPort {
   /** Throws `SyncTransportError` for transport failures. Resolves with the raw response body. */
   push(request: SyncPushRequest): Promise<unknown>;
   pull(request: SyncPullRequest): Promise<unknown>;
   /** Optional full-snapshot resync endpoint for cursor-expired or schema-retired recovery. */
   pullSnapshot?(request: SyncSnapshotResyncRequest): Promise<unknown>;
+  /** Optional device registration so the server stops rejecting the scope as `DEVICE_REVOKED`. */
+  registerDevice?(request: SyncDeviceRegistrationRequest): Promise<unknown>;
 }
 
 export interface IdGeneratorPort {

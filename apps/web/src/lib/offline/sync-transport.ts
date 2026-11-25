@@ -20,6 +20,7 @@
  */
 import {
   SyncTransportError,
+  type SyncDeviceRegistrationRequest,
   type SyncPullRequest,
   type SyncPushRequest,
   type SyncSnapshotResyncRequest,
@@ -27,12 +28,14 @@ import {
 } from "@super-restaurant/sync-engine";
 
 export const WEB_SYNC_PATHS = Object.freeze({
+  devices: "/sync/devices",
   push: "/sync/push",
   pull: "/sync/pull",
   snapshot: "/sync/snapshot",
 });
 
 export interface WebSyncTransportPaths {
+  readonly devices: string;
   readonly push: string;
   readonly pull: string;
   readonly snapshot: string;
@@ -96,6 +99,7 @@ async function readDeclaredRevocationCode(response: Response): Promise<string | 
 export function createWebSyncTransport(options: WebSyncTransportOptions): SyncTransportPort {
   const base = normalizeBaseUrl(options.apiBaseUrl);
   const paths: WebSyncTransportPaths = Object.freeze({
+    devices: normalizePath(options.paths?.devices ?? WEB_SYNC_PATHS.devices),
     push: normalizePath(options.paths?.push ?? WEB_SYNC_PATHS.push),
     pull: normalizePath(options.paths?.pull ?? WEB_SYNC_PATHS.pull),
     snapshot: normalizePath(options.paths?.snapshot ?? WEB_SYNC_PATHS.snapshot),
@@ -184,6 +188,7 @@ export function createWebSyncTransport(options: WebSyncTransportOptions): SyncTr
     push: (request: SyncPushRequest): Promise<unknown> => post(paths.push, request),
     pull: (request: SyncPullRequest): Promise<unknown> => post(paths.pull, request),
     pullSnapshot: (request: SyncSnapshotResyncRequest): Promise<unknown> => post(paths.snapshot, request),
+    registerDevice: (request: SyncDeviceRegistrationRequest): Promise<unknown> => post(paths.devices, request),
   });
 }
 

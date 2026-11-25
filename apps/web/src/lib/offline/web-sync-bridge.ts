@@ -27,6 +27,7 @@ import {
   DeviceSyncEngine,
   isTerminalState,
   SyncEngineError,
+  SyncTransportError,
   type CapabilityPreconditions,
   type ClockPort,
   type DurableSyncStoragePort,
@@ -283,6 +284,8 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   let closing = false;
   let activeCommits = 0;
   const commitWaiters: Array<() => void> = [];
+  /** In-memory only: a registered scope survives for this bridge session, never on disk. */
+  const registeredScopes = new Set<string>();
 
   const engine = new DeviceSyncEngine({
     clientType: "web_pos",
@@ -342,12 +345,38 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
     notify();
   };
 
+  /**
+   * Registers this device in the scope before the first push of the session. An
+   * unregistered device is rejected by the server as `DEVICE_REVOKED`, which the
+   * engine turns into a revoked scope that never drains. Registration is retried
+   * on the next sync until it succeeds, and a hard `401`/`403` blocks the push
+   * instead of sending data the server will reject.
+   */
+  const ensureDeviceRegistered = async (scope: BranchScope): Promise<boolean> => {
+    const key = scopeKey(scope);
+    if (registeredScopes.has(key)) return true;
+    const registerDevice = options.transport.registerDevice;
+    if (registerDevice === undefined) return true;
+    try {
+      await registerDevice({ deviceId: options.deviceId, scope });
+      registeredScopes.add(key);
+      return true;
+    } catch (error) {
+      const nonRetryable = error instanceof SyncTransportError && !error.retryable;
+      connectivityRef.current = nonRetryable
+        ? "sync_blocked"
+        : connectivityRef.current === "offline" ? "offline" : "degraded";
+      return false;
+    }
+  };
+
   const syncNow = (scope: BranchScope): Promise<void> => {
     if (syncPromise !== undefined) return syncPromise;
     const run = (async (): Promise<void> => {
       syncing = true;
       notify();
       try {
+        if (!(await ensureDeviceRegistered(scope))) return;
         if (options.actorId !== undefined) {
           // Defence in depth for a shared/legacy store: never hand this actor's
           // token a batch that contains another actor's unconfirmed evidence.

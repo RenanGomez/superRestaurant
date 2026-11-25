@@ -396,3 +396,56 @@ test("stableEntityId es determinista para la misma intención", () => {  const f
   assert.notEqual(first, other);
   assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
 });
+
+test("el puente registra el dispositivo exactamente una vez antes del primer push", async () => {
+  const factory = new IDBFactory();
+  const storage = await openStorage(factory, "register-once");
+  const registered: Array<{ readonly deviceId: string; readonly scope: BranchScope }> = [];
+  const base = recordingTransport();
+  const transport: SyncTransportPort = {
+    ...base,
+    registerDevice: (request) => {
+      registered.push(request);
+      return Promise.resolve({ status: "active" });
+    },
+  };
+  const bridge = await openWebSyncBridge({ actorId: actor, deviceId: device, ids: idGenerator(), storage, transport });
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "registered-intent")))?.committed, true);
+
+  await bridge.syncNow(scopeA);
+  await bridge.syncNow(scopeA);
+
+  assert.deepEqual(registered, [{ deviceId: device, scope: scopeA }]);
+  assert.deepEqual(base.keys, ["registered-intent"]);
+});
+
+test("un registro 403 bloquea el push y conserva la evidencia local", async () => {
+  const factory = new IDBFactory();
+  const storage = await openStorage(factory, "register-forbidden");
+  const base = recordingTransport();
+  let registrations = 0;
+  const transport: SyncTransportPort = {
+    ...base,
+    registerDevice: () => {
+      registrations += 1;
+      return Promise.reject(new SyncTransportError("HTTP_403", false));
+    },
+  };
+  const bridge = await openWebSyncBridge({ actorId: actor, deviceId: device, ids: idGenerator(), storage, transport });
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "forbidden-intent")))?.committed, true);
+
+  await bridge.syncNow(scopeA);
+
+  assert.equal(registrations, 1);
+  assert.deepEqual(base.keys, []);
+  assert.equal(bridge.getSnapshot(scopeA).events[0]?.localState, "pending");
+});
+
+test("sin registro en el transporte el puente conserva el comportamiento anterior", async () => {
+  const factory = new IDBFactory();
+  const storage = await openStorage(factory, "no-register");
+  const bridge = await openWebSyncBridge({ actorId: actor, deviceId: device, ids: idGenerator(), storage, transport: recordingTransport() });
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "legacy-transport")))?.committed, true);
+  await bridge.syncNow(scopeA);
+  assert.equal(bridge.getSnapshot(scopeA).events[0]?.localState, "accepted");
+});

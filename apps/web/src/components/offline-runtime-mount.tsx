@@ -63,7 +63,7 @@ export function OfflineRuntimeMount({ scope, actorId }: OfflineRuntimeMountProps
       accessToken: () => Promise.resolve(SAME_ORIGIN_PROXY_TOKEN),
       apiBaseUrl: window.location.origin,
       canSend: () => !released,
-      paths: { pull: "/api/sync/pull", push: "/api/sync/push", snapshot: "/api/sync/snapshot" },
+      paths: { devices: "/api/sync/devices", pull: "/api/sync/pull", push: "/api/sync/push", snapshot: "/api/sync/snapshot" },
       timeoutMs: 30_000,
     });
 

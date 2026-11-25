@@ -1,23 +1,11 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable } from "@nestjs/common";
-import { isSyncId, parseBranchScope, parseSyncPullRequestV1, parseSyncPullResponseV1, type SyncPullResponseV1 } from "@super-restaurant/shared-types";
+import { parseSyncPullRequestV1, parseSyncPullResponseV1, type SyncPullResponseV1 } from "@super-restaurant/shared-types";
 import { DATABASE_CLIENT, type TransactionalDatabaseClientPort } from "../database.js";
 import { SyncCursor } from "./sync-cursor.js";
 
 @Injectable()
 export class SyncPullService {
   public constructor(@Inject(DATABASE_CLIENT) private readonly database: TransactionalDatabaseClientPort, @Inject(SyncCursor) private readonly cursor: SyncCursor) {}
-  public async register(actorId: string, input: unknown): Promise<{ status: string }> {
-    if (typeof input !== "object" || input === null || Array.isArray(input)) throw new BadRequestException({ code: "SYNC_REQUEST_INVALID" });
-    const body = input as Record<string, unknown>;
-    if (Object.keys(body).sort().join(",") !== "deviceId,scope") throw new BadRequestException({ code: "SYNC_REQUEST_INVALID" });
-    const scope = parseBranchScope(body["scope"]); const deviceId = body["deviceId"];
-    if (!scope || !isSyncId(deviceId) || deviceId !== deviceId.toLowerCase()) throw new BadRequestException({ code: "SYNC_REQUEST_INVALID" });
-    return this.database.transaction(async (db) => {
-      const response = await db.query("select app_private.sync_register_device($1::uuid,$2::uuid,$3::uuid,$4::text) as registered", [actorId, scope.restaurantId, scope.branchId, deviceId]);
-      if ((response.rows[0] as { registered?: boolean } | undefined)?.registered !== true) throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
-      return { status: "active" };
-    });
-  }
   public async pull(actorId: string, input: unknown): Promise<SyncPullResponseV1> {
     const request = parseSyncPullRequestV1(input);
     if (!request) throw new BadRequestException({ code: "SYNC_REQUEST_INVALID" });
