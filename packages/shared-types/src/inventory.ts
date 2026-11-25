@@ -81,6 +81,15 @@ export interface RecipeVersionV1 {
   readonly lines: readonly RecipeLineV1[];
 }
 
+/** UI command: the server assigns `recipeId` and `version` when it publishes the snapshot. */
+export interface PublishRecipeCommandV1 {
+  readonly restaurantId: RestaurantId;
+  readonly productId: string;
+  readonly modifierId: string | null;
+  readonly notes: string | null;
+  readonly lines: readonly RecipeLineV1[];
+}
+
 /** UI command: the server assigns `id` and `occurredAt`. */
 export interface InventoryMovementRequestV1 {
   readonly restaurantId: RestaurantId;
@@ -128,6 +137,7 @@ const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/u;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 const CONTROL_CHAR_PATTERN = /[\p{Cc}\p{Cf}]/u;
 const MAX_RECIPE_LINES = 500;
+const MAX_RECIPE_COMMAND_LINES = 200;
 const MAX_PURCHASE_ORDER_LINES = 1_000;
 
 type PlainRecord = Readonly<Record<string, unknown>>;
@@ -532,6 +542,65 @@ export function parseRecipeVersionV1(value: unknown): RecipeVersionV1 | undefine
     recipeId,
     productId,
     version,
+    lines: Object.freeze(lines),
+  });
+}
+
+export function parsePublishRecipeCommandV1(value: unknown): PublishRecipeCommandV1 | undefined {
+  let record: PlainRecord;
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    for (const key of keys) {
+      if (
+        typeof key !== "string"
+        || !["restaurantId", "productId", "modifierId", "notes", "lines"].includes(key)
+      ) {
+        return undefined;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) return undefined;
+    }
+    record = value as PlainRecord;
+  } catch {
+    return undefined;
+  }
+
+  const restaurantId = ownValue(record, "restaurantId");
+  const productId = ownValue(record, "productId");
+  const modifierId = Object.hasOwn(record, "modifierId") ? ownValue(record, "modifierId") : null;
+  const notes = Object.hasOwn(record, "notes") ? ownValue(record, "notes") : null;
+  const rawLines = exactArray(ownValue(record, "lines"), MAX_RECIPE_COMMAND_LINES);
+
+  if (
+    !isInventoryId(restaurantId)
+    || !isInventoryId(productId)
+    || !(modifierId === null || isInventoryId(modifierId))
+    || !isNullableText(notes, 500)
+    || rawLines === undefined
+    || rawLines.length === 0
+  ) {
+    return undefined;
+  }
+
+  const lines: RecipeLineV1[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of rawLines) {
+    const line = parseRecipeLineV1(rawLine);
+    if (line === undefined) return undefined;
+    const lineKey = `${line.itemId}\u0000${line.unitCode}`;
+    if (seen.has(lineKey)) return undefined;
+    seen.add(lineKey);
+    lines.push(line);
+  }
+
+  return Object.freeze({
+    restaurantId: restaurantId as RestaurantId,
+    productId,
+    modifierId: modifierId as string | null,
+    notes: notes as string | null,
     lines: Object.freeze(lines),
   });
 }
