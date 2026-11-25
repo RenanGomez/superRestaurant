@@ -17,6 +17,8 @@ import type { InventoryMovement } from "./stock-ledger.js";
 function movement(overrides: Partial<InventoryMovement> = {}): InventoryMovement {
   return {
     id: "m-1",
+    restaurantId: "r1",
+    branchId: "b1",
     warehouseId: "w1",
     itemId: "i1",
     kind: "receipt",
