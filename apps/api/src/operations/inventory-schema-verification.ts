@@ -30,3 +30,7 @@ export function inventorySaleConsumptionInvariantSql(): string {
 export function inventoryLineCancelInvariantSql(): string {
   return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_line_cancel_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
 }
+
+export function inventoryMovementsApiInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_movements_api_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}

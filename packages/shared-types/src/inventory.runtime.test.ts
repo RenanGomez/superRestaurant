@@ -102,7 +102,7 @@ function validMovementRequest(overrides: Record<string, unknown> = {}): Record<s
   delete request.occurredAt;
   delete request.recipeVersionId;
   delete request.roundingRemainder;
-  return { ...request, ...overrides };
+  return { ...request, toWarehouseId: null, ...overrides };
 }
 
 function validPurchaseOrder(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -209,6 +209,58 @@ test("parseInventoryMovementRequestV1 rejects an unknown kind", () => {
 
 test("parseInventoryMovementRequestV1 rejects a decimal unit cost", () => {
   assert.equal(parseInventoryMovementRequestV1(validMovementRequest({ unitCostMinor: 1.5 })), undefined);
+});
+
+// ---- P1: the transfer target is an explicit warehouse, not the pair id ----------------------
+
+test("parseInventoryMovementRequestV1 accepts a transfer with toWarehouseId and a null pair id", () => {
+  const parsed = parseInventoryMovementRequestV1(validMovementRequest({
+    kind: "transfer_out",
+    quantityDelta: -5,
+    toWarehouseId: WAREHOUSE,
+    transferPairId: null,
+  }));
+  assert.ok(parsed);
+  assert.equal(parsed.toWarehouseId, WAREHOUSE);
+  assert.equal(parsed.transferPairId, null);
+});
+
+test("parseInventoryMovementRequestV1 rejects a transfer without toWarehouseId", () => {
+  const missing = validMovementRequest({ kind: "transfer_in", quantityDelta: 5, transferPairId: null });
+  delete missing.toWarehouseId;
+  assert.equal(parseInventoryMovementRequestV1(missing), undefined);
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({
+      kind: "transfer_in",
+      quantityDelta: 5,
+      toWarehouseId: null,
+      transferPairId: null,
+    })),
+    undefined,
+  );
+});
+
+test("parseInventoryMovementRequestV1 rejects toWarehouseId outside a transfer", () => {
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({
+      kind: "adjustment",
+      quantityDelta: -5,
+      reason: "ajuste",
+      toWarehouseId: WAREHOUSE,
+    })),
+    undefined,
+  );
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({ toWarehouseId: "not-an-id" })),
+    undefined,
+  );
+});
+
+test("parseInventoryMovementRequestV1 rejects a client-supplied transfer pair id", () => {
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({ transferPairId: MOVEMENT })),
+    undefined,
+  );
 });
 
 test("parsePurchaseOrderV1 accepts a valid purchase order", () => {

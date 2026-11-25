@@ -94,7 +94,10 @@ export interface InventoryMovementRequestV1 {
   readonly reason: string | null;
   readonly idempotencyKey: string;
   readonly compensatesMovementId: string | null;
+  /** Server-owned: the request only ever sends `null`; the ledger assigns the pair id. */
   readonly transferPairId: string | null;
+  /** Counterpart warehouse: a UUID for `transfer_out`/`transfer_in`, `null` otherwise. */
+  readonly toWarehouseId: string | null;
   readonly unitCostMinor: number | null;
   readonly currency: string | null;
 }
@@ -236,6 +239,11 @@ function hasValidCompensation(kind: InventoryMovementKindV1, compensatesMovement
 function hasValidTransferPair(kind: InventoryMovementKindV1, transferPairId: unknown): boolean {
   if (isTransferKind(kind)) return isInventoryId(transferPairId);
   return transferPairId === null || isInventoryId(transferPairId);
+}
+
+function hasValidTransferTarget(kind: InventoryMovementKindV1, toWarehouseId: unknown): boolean {
+  if (isTransferKind(kind)) return isInventoryId(toWarehouseId);
+  return toWarehouseId === null;
 }
 
 function exactRecord(value: unknown, keys: readonly string[]): PlainRecord | undefined {
@@ -542,6 +550,7 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
     "idempotencyKey",
     "compensatesMovementId",
     "transferPairId",
+    "toWarehouseId",
     "unitCostMinor",
     "currency",
   ]);
@@ -559,6 +568,7 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
   const idempotencyKey = ownValue(record, "idempotencyKey");
   const compensatesMovementId = ownValue(record, "compensatesMovementId");
   const transferPairId = ownValue(record, "transferPairId");
+  const toWarehouseId = ownValue(record, "toWarehouseId");
   const unitCostMinor = ownValue(record, "unitCostMinor");
   const currency = ownValue(record, "currency");
 
@@ -576,7 +586,8 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
     || !hasValidReason(kind, reason)
     || !isIdempotencyKey(idempotencyKey)
     || !hasValidCompensation(kind, compensatesMovementId)
-    || !hasValidTransferPair(kind, transferPairId)
+    || transferPairId !== null
+    || !hasValidTransferTarget(kind, toWarehouseId)
     || !isMoneyPair(unitCostMinor, currency)
   ) {
     return undefined;
@@ -594,7 +605,8 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
     reason,
     idempotencyKey,
     compensatesMovementId: compensatesMovementId as string | null,
-    transferPairId: transferPairId as string | null,
+    transferPairId: null,
+    toWarehouseId: toWarehouseId as string | null,
     unitCostMinor: unitCostMinor as number | null,
     currency: currency as string | null,
   });
