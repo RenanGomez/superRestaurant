@@ -33,8 +33,11 @@ create table app.inventory_purchase_orders (
   supplier_id uuid not null,
   status text not null default 'draft',
   currency text not null,
+  idempotency_key text not null,
   ordered_at timestamptz not null default pg_catalog.clock_timestamp(),
   received_at timestamptz,
+  received_by uuid references auth.users (id) on delete restrict,
+  received_device_id uuid,
   created_by uuid not null references auth.users (id) on delete restrict,
   created_at timestamptz not null default pg_catalog.clock_timestamp(),
   updated_at timestamptz not null default pg_catalog.clock_timestamp(),
@@ -43,8 +46,13 @@ create table app.inventory_purchase_orders (
   constraint inventory_purchase_orders_supplier_scope_fk foreign key (restaurant_id, supplier_id)
     references app.inventory_suppliers (restaurant_id, id) on delete restrict,
   constraint inventory_purchase_orders_scope_id_unique unique (restaurant_id, id),
+  constraint inventory_purchase_orders_restaurant_idempotency_unique unique (restaurant_id, idempotency_key),
   constraint inventory_purchase_orders_status_valid check (status in ('draft', 'sent', 'received', 'cancelled')),
   constraint inventory_purchase_orders_currency_valid check (currency ~ '^[A-Z]{3}$'),
+  constraint inventory_purchase_orders_idempotency_key_valid check (
+    pg_catalog.char_length(pg_catalog.btrim(idempotency_key)) between 1 and 200
+    and idempotency_key <> ''
+  ),
   constraint inventory_purchase_orders_received_consistency check (
     (status = 'received' and received_at is not null)
     or (status <> 'received' and received_at is null)
@@ -116,8 +124,10 @@ create trigger inventory_movements_purchase_line_cost
   before insert on app.inventory_movements
   for each row execute function app_private.inventory_apply_purchase_line_cost();
 
--- Payload: {"supplierId": uuid, "currency": "MXN", "orderedAt"?: timestamp,
+-- Payload: {"supplierId": uuid, "currency": "MXN", "idempotencyKey": text, "orderedAt"?: timestamp,
 -- "lines": [{"itemId": uuid, "quantity": int, "unitCode": "g|ml|piece", "unitCostMinor": int}]}.
+-- Creation is idempotent per (restaurant, idempotencyKey): an identical replay returns the stored
+-- order with replayed:true, while a different payload under the same key is a conflict.
 create function app_private.inventory_create_purchase_order(
   p_actor_id uuid,
   p_restaurant_id uuid,
@@ -132,9 +142,16 @@ set search_path = ''
 as $function$
 declare
   v_order_id uuid;
+  v_existing app.inventory_purchase_orders%rowtype;
+  v_constraint text;
+  v_attempt integer := 0;
   v_supplier_id uuid;
   v_currency text;
+  v_idempotency_key text;
   v_ordered_at timestamptz;
+  v_payload_lines jsonb := '[]'::jsonb;
+  v_payload_lines_sorted jsonb;
+  v_stored_lines_sorted jsonb;
   v_line jsonb;
   v_item_id uuid;
   v_item_unit text;
@@ -145,8 +162,6 @@ declare
   v_unit_cost_text text;
   v_unit_cost_minor bigint;
   v_unit_code text;
-  v_index integer := 0;
-  v_line_count integer;
 begin
   if p_actor_id is null
     or p_restaurant_id is null
@@ -185,12 +200,27 @@ begin
   if exists (
     select 1
     from pg_catalog.jsonb_object_keys(p_payload) as actual(key)
-    where actual.key not in ('supplierId', 'currency', 'orderedAt', 'lines')
+    where actual.key not in ('supplierId', 'currency', 'idempotencyKey', 'orderedAt', 'lines')
   ) then
     raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_PAYLOAD_INVALID';
   end if;
 
-  if not (p_payload ? 'supplierId' and p_payload ? 'currency' and p_payload ? 'lines') then
+  if not (
+    p_payload ? 'supplierId'
+    and p_payload ? 'currency'
+    and p_payload ? 'idempotencyKey'
+    and p_payload ? 'lines'
+  ) then
+    raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_PAYLOAD_INVALID';
+  end if;
+
+  v_idempotency_key := p_payload ->> 'idempotencyKey';
+  if v_idempotency_key is null
+    or pg_catalog.jsonb_typeof(p_payload -> 'idempotencyKey') <> 'string'
+    or v_idempotency_key <> pg_catalog.btrim(v_idempotency_key)
+    or v_idempotency_key ~ '[[:cntrl:]]'
+    or pg_catalog.char_length(v_idempotency_key) not between 1 and 200
+  then
     raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_PAYLOAD_INVALID';
   end if;
 
@@ -212,7 +242,6 @@ begin
   if pg_catalog.jsonb_array_length(p_payload -> 'lines') not between 1 and 200 then
     raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_PAYLOAD_INVALID';
   end if;
-  v_line_count := pg_catalog.jsonb_array_length(p_payload -> 'lines');
 
   if not (
     (p_payload ->> 'supplierId') ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
@@ -221,28 +250,11 @@ begin
   end if;
   v_supplier_id := (p_payload ->> 'supplierId')::uuid;
 
-  if not exists (
-    select 1
-    from app.inventory_suppliers as s
-    where s.id = v_supplier_id
-      and s.restaurant_id = p_restaurant_id
-      and s.active
-  ) then
-    raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_SUPPLIER_SCOPE_INVALID';
-  end if;
-
-  insert into app.inventory_purchase_orders (
-    restaurant_id, branch_id, supplier_id, status, currency, ordered_at, created_by
-  ) values (
-    p_restaurant_id, p_branch_id, v_supplier_id, 'draft', v_currency, v_ordered_at, p_actor_id
-  )
-  returning id into v_order_id;
-
+  -- Shape validation only: lines are normalized for the dedupe comparison. Existence, scope and
+  -- unit checks run on the insert path so an identical replay never depends on current catalog state.
   for v_line in
     select e.value from pg_catalog.jsonb_array_elements(p_payload -> 'lines') as e
   loop
-    v_index := v_index + 1;
-
     if pg_catalog.jsonb_typeof(v_line) <> 'object' then
       raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
     end if;
@@ -278,42 +290,147 @@ begin
       raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
     end if;
     v_unit_cost_minor := v_unit_cost_text::bigint;
+    if v_unit_cost_minor < 0 then
+      raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
+    end if;
 
     v_unit_code := v_line ->> 'unitCode';
     if v_unit_code is null or v_unit_code not in ('g', 'ml', 'piece') then
       raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
     end if;
 
-    select i.unit_code, i.deleted_at, i.active
-      into v_item_unit, v_item_deleted_at, v_item_active
-    from app.inventory_items as i
-    where i.id = v_item_id
-      and i.restaurant_id = p_restaurant_id;
-
-    if not found then
-      raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_ITEM_SCOPE_INVALID';
-    end if;
-
-    if v_item_deleted_at is not null or not v_item_active then
-      raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_ITEM_INACTIVE';
-    end if;
-
-    if v_item_unit <> v_unit_code then
-      raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
-    end if;
-
-    insert into app.inventory_purchase_order_lines (
-      restaurant_id, order_id, item_id, quantity, unit_code, unit_cost_minor
-    ) values (
-      p_restaurant_id, v_order_id, v_item_id, v_quantity, v_unit_code, v_unit_cost_minor
+    v_payload_lines := v_payload_lines || pg_catalog.jsonb_build_array(
+      pg_catalog.jsonb_build_object(
+        'item_id', v_item_id,
+        'quantity', v_quantity,
+        'unit_code', v_unit_code,
+        'unit_cost_minor', v_unit_cost_minor
+      )
     );
   end loop;
 
-  if v_index <> v_line_count then
-    raise exception using errcode = '55000', message = 'INVENTORY_PURCHASE_LINE_COUNT_MISMATCH';
+  -- Two lines for the same item and unit would violate purchase_order_lines_unique and surface as a
+  -- raw 23505; reject the payload as invalid before touching the tables.
+  if exists (
+    select 1
+    from pg_catalog.jsonb_array_elements(v_payload_lines) as e
+    group by e.value ->> 'item_id', e.value ->> 'unit_code'
+    having pg_catalog.count(*) > 1
+  ) then
+    raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
   end if;
 
-  return pg_catalog.jsonb_build_object('orderId', v_order_id, 'status', 'draft');
+  select pg_catalog.jsonb_agg(e.value order by e.value::text)
+    into v_payload_lines_sorted
+  from pg_catalog.jsonb_array_elements(v_payload_lines) as e;
+
+  -- A missing row is created; a duplicate key is resolved by the unique constraint and retried once
+  -- so concurrent callers still observe the replay instead of an error.
+  loop
+    v_attempt := v_attempt + 1;
+
+    select * into v_existing
+    from app.inventory_purchase_orders as o
+    where o.restaurant_id = p_restaurant_id
+      and o.idempotency_key = v_idempotency_key
+    for update;
+
+    if found then
+      if v_existing.branch_id <> p_branch_id then
+        raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_IDEMPOTENCY_CONFLICT';
+      end if;
+
+      select pg_catalog.jsonb_agg(x.line order by x.line::text)
+        into v_stored_lines_sorted
+      from (
+        select pg_catalog.jsonb_build_object(
+          'item_id', l.item_id,
+          'quantity', l.quantity,
+          'unit_code', l.unit_code,
+          'unit_cost_minor', l.unit_cost_minor
+        ) as line
+        from app.inventory_purchase_order_lines as l
+        where l.order_id = v_existing.id
+          and l.restaurant_id = p_restaurant_id
+      ) as x;
+
+      if v_existing.supplier_id = v_supplier_id
+        and v_existing.currency = v_currency
+        and v_stored_lines_sorted is not distinct from v_payload_lines_sorted
+      then
+        return pg_catalog.jsonb_build_object(
+          'orderId', v_existing.id,
+          'status', v_existing.status,
+          'replayed', true
+        );
+      end if;
+
+      raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_IDEMPOTENCY_CONFLICT';
+    end if;
+
+    begin
+      if not exists (
+        select 1
+        from app.inventory_suppliers as s
+        where s.id = v_supplier_id
+          and s.restaurant_id = p_restaurant_id
+          and s.active
+      ) then
+        raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_SUPPLIER_SCOPE_INVALID';
+      end if;
+
+      insert into app.inventory_purchase_orders (
+        restaurant_id, branch_id, supplier_id, status, currency, idempotency_key, ordered_at, created_by
+      ) values (
+        p_restaurant_id, p_branch_id, v_supplier_id, 'draft', v_currency, v_idempotency_key,
+        v_ordered_at, p_actor_id
+      )
+      returning id into v_order_id;
+
+      for v_line in
+        select e.value from pg_catalog.jsonb_array_elements(v_payload_lines) as e
+      loop
+        v_item_id := (v_line ->> 'item_id')::uuid;
+        v_quantity := (v_line ->> 'quantity')::integer;
+        v_unit_code := v_line ->> 'unit_code';
+        v_unit_cost_minor := (v_line ->> 'unit_cost_minor')::bigint;
+
+        select i.unit_code, i.deleted_at, i.active
+          into v_item_unit, v_item_deleted_at, v_item_active
+        from app.inventory_items as i
+        where i.id = v_item_id
+          and i.restaurant_id = p_restaurant_id;
+
+        if not found then
+          raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_ITEM_SCOPE_INVALID';
+        end if;
+
+        if v_item_deleted_at is not null or not v_item_active then
+          raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_ITEM_INACTIVE';
+        end if;
+
+        if v_item_unit <> v_unit_code then
+          raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
+        end if;
+
+        insert into app.inventory_purchase_order_lines (
+          restaurant_id, order_id, item_id, quantity, unit_code, unit_cost_minor
+        ) values (
+          p_restaurant_id, v_order_id, v_item_id, v_quantity, v_unit_code, v_unit_cost_minor
+        );
+      end loop;
+
+      return pg_catalog.jsonb_build_object('orderId', v_order_id, 'status', 'draft');
+    exception when unique_violation then
+      get stacked diagnostics v_constraint = constraint_name;
+      if v_constraint <> 'inventory_purchase_orders_restaurant_idempotency_unique' then
+        raise exception using errcode = '22000', message = 'INVENTORY_PURCHASE_LINE_INVALID';
+      end if;
+      if v_attempt >= 2 then
+        raise;
+      end if;
+    end;
+  end loop;
 end
 $function$;
 
@@ -463,6 +580,8 @@ begin
   update app.inventory_purchase_orders
   set status = 'received',
       received_at = v_received_at,
+      received_by = p_actor_id,
+      received_device_id = v_device_id,
       updated_at = pg_catalog.clock_timestamp()
   where id = v_order.id;
 
@@ -558,13 +677,13 @@ create policy inventory_purchase_order_lines_active_branch_read
 comment on table app.inventory_suppliers is
   'Restaurant-scoped suppliers; a supplier name is unique per restaurant while active.';
 comment on table app.inventory_purchase_orders is
-  'Branch-scoped purchase orders with an explicit draft/sent/received/cancelled lifecycle.';
+  'Branch-scoped purchase orders with an explicit draft/sent/received/cancelled lifecycle and a per-restaurant idempotency key.';
 comment on table app.inventory_purchase_order_lines is
   'Integer quantities in the item base unit and integer minor-unit costs; unique per order, item and unit.';
 comment on function app_private.inventory_create_purchase_order(uuid, uuid, uuid, jsonb) is
-  'Server-only creation of a draft purchase order with actor/role, supplier, item, unit and integer validation.';
+  'Server-only idempotent creation of a draft purchase order with actor/role, supplier, item, unit and integer validation.';
 comment on function app_private.inventory_receive_purchase_order(uuid, uuid, jsonb) is
-  'Server-only reception: one idempotent receipt movement per line, then marks the order received.';
+  'Server-only reception: one idempotent receipt movement per line, then marks the order received with actor and device audit.';
 comment on function app_private.inventory_apply_purchase_line_cost() is
   'Stamps unit_cost_minor and currency on receipt movements sourced from a purchase order line.';
 

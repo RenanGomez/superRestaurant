@@ -30,6 +30,8 @@ declare
   line_ml uuid;
   warehouse uuid := gen_random_uuid();
   warehouse2 uuid := gen_random_uuid();
+  device uuid := gen_random_uuid();
+  order_count bigint;
   po_id uuid;
   po2_id uuid;
   foreign_po_id uuid;
@@ -113,6 +115,7 @@ begin
   payload := pg_catalog.jsonb_build_object(
     'supplierId', supplier,
     'currency', 'MXN',
+    'idempotencyKey', 'po-main',
     'lines', pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 100, 'unitCode', 'g', 'unitCostMinor', 250),
       pg_catalog.jsonb_build_object('itemId', item_ml, 'quantity', 40, 'unitCode', 'ml', 'unitCostMinor', 75)
@@ -129,11 +132,66 @@ begin
     raise exception 'created_by not recorded';
   end if;
 
+  -- 1a. Replaying the same idempotency key returns the same order without new rows.
+  result := app_private.inventory_create_purchase_order(actor, r, b, payload);
+  if (result ->> 'orderId')::uuid <> po_id then raise exception 'replay order id %', result; end if;
+  if (result ->> 'replayed')::boolean is not true then raise exception 'replay flag missing %', result; end if;
+  if (result ->> 'status') <> 'draft' then raise exception 'replay status %', result; end if;
+  select pg_catalog.count(*) into order_count from app.inventory_purchase_orders as o
+  where o.restaurant_id = r and o.idempotency_key = 'po-main';
+  if order_count <> 1 then raise exception 'replay duplicated orders: %', order_count; end if;
+  select pg_catalog.count(*) into movement_count from app.inventory_purchase_order_lines as l
+  where l.order_id = po_id;
+  if movement_count <> 2 then raise exception 'replay duplicated lines: %', movement_count; end if;
+
+  -- 1b. The same key with structurally different lines is a conflict.
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-main',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 101, 'unitCode', 'g', 'unitCostMinor', 250)
+      )
+    ));
+    raise exception 'idempotency conflict accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_IDEMPOTENCY_CONFLICT' then raise; end if;
+  end;
+
+  -- 1c. The same key from another branch of the same restaurant is a conflict, never a replay.
+  begin
+    perform app_private.inventory_create_purchase_order(other_branch_actor, r, b3, payload);
+    raise exception 'cross-branch idempotency replay accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_IDEMPOTENCY_CONFLICT' then raise; end if;
+  end;
+
+  -- 1d. Two lines for the same item and unit are an invalid payload, not a raw constraint error.
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-duplicate-lines',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 10, 'unitCode', 'g', 'unitCostMinor', 250),
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 20, 'unitCode', 'g', 'unitCostMinor', 250)
+      )
+    ));
+    raise exception 'duplicate purchase lines accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_LINE_INVALID' then raise; end if;
+  end;
+
   -- An item from another restaurant is rejected.
   begin
     perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
       'supplierId', supplier,
       'currency', 'MXN',
+      'idempotencyKey', 'po-foreign-item',
       'lines', pg_catalog.jsonb_build_array(
         pg_catalog.jsonb_build_object('itemId', foreign_item, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
       )
@@ -149,6 +207,7 @@ begin
     perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
       'supplierId', supplier,
       'currency', 'MXN',
+      'idempotencyKey', 'po-decimal-qty',
       'lines', pg_catalog.jsonb_build_array(
         pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1.5, 'unitCode', 'g', 'unitCostMinor', 1)
       )
@@ -162,6 +221,7 @@ begin
     perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
       'supplierId', supplier,
       'currency', 'MXN',
+      'idempotencyKey', 'po-zero-qty',
       'lines', pg_catalog.jsonb_build_array(
         pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 0, 'unitCode', 'g', 'unitCostMinor', 1)
       )
@@ -175,6 +235,7 @@ begin
     perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
       'supplierId', supplier,
       'currency', 'MXN',
+      'idempotencyKey', 'po-negative-qty',
       'lines', pg_catalog.jsonb_build_array(
         pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', -5, 'unitCode', 'g', 'unitCostMinor', 1)
       )
@@ -188,6 +249,7 @@ begin
     perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
       'supplierId', supplier,
       'currency', 'MXN',
+      'idempotencyKey', 'po-mismatched-unit',
       'lines', pg_catalog.jsonb_build_array(
         pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 10, 'unitCode', 'ml', 'unitCostMinor', 1)
       )
@@ -198,11 +260,174 @@ begin
     if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_LINE_INVALID' then raise; end if;
   end;
 
+  -- Negative, decimal, non-numeric and over-long unit costs fail as domain errors.
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-cost-negative',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', -1)
+      )
+    ));
+    raise exception 'negative unit cost accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_LINE_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-cost-decimal',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1.5)
+      )
+    ));
+    raise exception 'decimal unit cost accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_LINE_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-cost-text',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 'abc')
+      )
+    ));
+    raise exception 'non-numeric unit cost accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_LINE_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-cost-wide',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+          'itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1234567890123456789
+        )
+      )
+    ));
+    raise exception 'over-long unit cost accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_LINE_INVALID' then raise; end if;
+  end;
+
+  -- Currency must be an uppercase ISO-4217 code.
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'usd',
+      'idempotencyKey', 'po-currency-lower',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'lowercase currency accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_PAYLOAD_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'US',
+      'idempotencyKey', 'po-currency-short',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'short currency accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_PAYLOAD_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'USDD',
+      'idempotencyKey', 'po-currency-long',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'over-long currency accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_PAYLOAD_INVALID' then raise; end if;
+  end;
+
+  -- The idempotency key is required, non-empty and free of lateral whitespace.
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'missing idempotency key accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_PAYLOAD_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', '',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'empty idempotency key accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_PAYLOAD_INVALID' then raise; end if;
+  end;
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', supplier,
+      'currency', 'MXN',
+      'idempotencyKey', '  po-padded  ',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'padded idempotency key accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_PAYLOAD_INVALID' then raise; end if;
+  end;
+
+  -- A supplier owned by another restaurant cannot be used.
+  begin
+    perform app_private.inventory_create_purchase_order(actor, r, b, pg_catalog.jsonb_build_object(
+      'supplierId', foreign_supplier,
+      'currency', 'MXN',
+      'idempotencyKey', 'po-foreign-supplier',
+      'lines', pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object('itemId', item_g, 'quantity', 1, 'unitCode', 'g', 'unitCostMinor', 1)
+      )
+    ));
+    raise exception 'foreign supplier accepted';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_PURCHASE_SUPPLIER_SCOPE_INVALID' then raise; end if;
+  end;
+
   -- 2. The status check rejects an unknown lifecycle value.
   begin
     insert into app.inventory_purchase_orders (
-      restaurant_id, branch_id, supplier_id, status, currency, created_by
-    ) values (r, b, supplier, 'bogus', 'MXN', actor);
+      restaurant_id, branch_id, supplier_id, status, currency, idempotency_key, created_by
+    ) values (r, b, supplier, 'bogus', 'MXN', 'po-status-check', actor);
     raise exception 'invalid purchase order status accepted';
   exception when check_violation then
     get stacked diagnostics constraint_hit = constraint_name;
@@ -216,7 +441,7 @@ begin
 
   -- 3. Reception appends one receipt movement per line and the ledger balance matches.
   result := app_private.inventory_receive_purchase_order(
-    actor, po_id, pg_catalog.jsonb_build_object('warehouseId', warehouse));
+    actor, po_id, pg_catalog.jsonb_build_object('warehouseId', warehouse, 'deviceId', device));
   if (result ->> 'status') <> 'received' then raise exception 'receive status %', result; end if;
   if pg_catalog.jsonb_array_length(result -> 'movements') <> 2 then
     raise exception 'receive returned % movements', result;
@@ -235,6 +460,36 @@ begin
   end if;
   if (select o.received_at from app.inventory_purchase_orders as o where o.id = po_id) is null then
     raise exception 'received_at not recorded';
+  end if;
+  if (select o.received_by from app.inventory_purchase_orders as o where o.id = po_id) <> actor then
+    raise exception 'received_by not recorded';
+  end if;
+  if (select o.received_device_id from app.inventory_purchase_orders as o where o.id = po_id) <> device then
+    raise exception 'received_device_id not recorded';
+  end if;
+  select pg_catalog.count(*) into movement_count
+  from app.inventory_movements as mv
+  join app.inventory_purchase_order_lines as l
+    on l.id = mv.source_id and l.restaurant_id = mv.restaurant_id
+  where l.order_id = po_id
+    and mv.source_type = 'purchase_order_line'
+    and mv.kind = 'receipt'
+    and mv.actor_id = actor
+    and mv.device_id = device;
+  if movement_count <> 2 then raise exception 'receipt movement audit missing: %', movement_count; end if;
+  begin
+    perform app_private.inventory_receive_purchase_order(
+      foreign_actor, po_id, pg_catalog.jsonb_build_object('warehouseId', warehouse, 'deviceId', device));
+    raise exception 'foreign actor re-received a purchase order';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '42501' or err_message <> 'INVENTORY_PURCHASE_ACTOR_FORBIDDEN' then raise; end if;
+  end;
+  if (select o.received_by from app.inventory_purchase_orders as o where o.id = po_id) <> actor then
+    raise exception 'foreign receive changed received_by';
+  end if;
+  if (select o.status from app.inventory_purchase_orders as o where o.id = po_id) <> 'received' then
+    raise exception 'foreign receive changed the received status';
   end if;
   select bal.quantity into balance from app.inventory_balances as bal
   where bal.warehouse_id = warehouse and bal.item_id = item_g;
@@ -266,6 +521,12 @@ begin
   select bal.quantity into balance from app.inventory_balances as bal
   where bal.warehouse_id = warehouse and bal.item_id = item_g;
   if balance <> 100 then raise exception 'replay changed flour balance to %', balance; end if;
+  if (select o.received_by from app.inventory_purchase_orders as o where o.id = po_id) <> actor then
+    raise exception 'replay changed received_by';
+  end if;
+  if (select o.received_device_id from app.inventory_purchase_orders as o where o.id = po_id) <> device then
+    raise exception 'replay cleared received_device_id';
+  end if;
 
   -- 5. Receiving an already received order never moves stock again, even with another warehouse.
   replay := app_private.inventory_receive_purchase_order(
@@ -280,6 +541,12 @@ begin
   select coalesce(pg_catalog.sum(mv.quantity_delta), 0::bigint) into balance from app.inventory_movements as mv
   where mv.warehouse_id = warehouse2 and mv.item_id = item_g;
   if balance <> 0 then raise exception 'second receive moved stock: %', balance; end if;
+  if (select o.received_by from app.inventory_purchase_orders as o where o.id = po_id) <> actor then
+    raise exception 'second receive changed received_by';
+  end if;
+  if (select o.received_device_id from app.inventory_purchase_orders as o where o.id = po_id) <> device then
+    raise exception 'second receive cleared received_device_id';
+  end if;
 
   -- 6. Actors from another branch or restaurant can neither create nor receive.
   begin
@@ -304,8 +571,11 @@ begin
     if state <> '42501' or err_message <> 'INVENTORY_PURCHASE_ACTOR_FORBIDDEN' then raise; end if;
   end;
 
-  result := app_private.inventory_create_purchase_order(actor, r, b, payload);
+  result := app_private.inventory_create_purchase_order(
+    actor, r, b, payload || pg_catalog.jsonb_build_object('idempotencyKey', 'po-secondary'));
   po2_id := (result ->> 'orderId')::uuid;
+  if po2_id = po_id then raise exception 'distinct key reused the same order'; end if;
+  if (result ->> 'replayed') is not null then raise exception 'new key reported a replay %', result; end if;
   begin
     perform app_private.inventory_receive_purchase_order(
       foreign_actor, po2_id, pg_catalog.jsonb_build_object('warehouseId', warehouse));
@@ -325,6 +595,12 @@ begin
   if (select o.status from app.inventory_purchase_orders as o where o.id = po2_id) <> 'draft' then
     raise exception 'forbidden receive changed the order status';
   end if;
+  if (select o.received_by from app.inventory_purchase_orders as o where o.id = po2_id) is not null then
+    raise exception 'forbidden receive recorded received_by';
+  end if;
+  if (select o.received_device_id from app.inventory_purchase_orders as o where o.id = po2_id) is not null then
+    raise exception 'forbidden receive recorded received_device_id';
+  end if;
   select count(*) into movement_count
   from app.inventory_movements as mv
   join app.inventory_purchase_order_lines as l
@@ -336,6 +612,7 @@ begin
   result := app_private.inventory_create_purchase_order(foreign_actor, r2, b2, pg_catalog.jsonb_build_object(
     'supplierId', foreign_supplier,
     'currency', 'MXN',
+    'idempotencyKey', 'po-foreign-restaurant',
     'lines', pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object('itemId', foreign_item, 'quantity', 5, 'unitCode', 'g', 'unitCostMinor', 10)
     )
