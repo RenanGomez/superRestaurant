@@ -163,6 +163,22 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
     assert.equal(inventoryPurchaseOrderUnauthenticated.status, 401);
     assert.deepEqual(await inventoryPurchaseOrderUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
 
+    const inventoryAlertsUnauthenticated = await fetch(`${url}/api/v1/inventory/alerts?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryAlertsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryAlertsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryCostsUnauthenticated = await fetch(`${url}/api/v1/inventory/costs?restaurantId=${restaurantId}&branchId=${branchId}&warehouseId=${branchId}&itemId=${branchId}`);
+    assert.equal(inventoryCostsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryCostsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryProductCostsUnauthenticated = await fetch(`${url}/api/v1/inventory/product-costs?restaurantId=${restaurantId}&productId=${branchId}`);
+    assert.equal(inventoryProductCostsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryProductCostsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryMarginsUnauthenticated = await fetch(`${url}/api/v1/inventory/margins?restaurantId=${restaurantId}&branchId=${branchId}&productId=${branchId}`);
+    assert.equal(inventoryMarginsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryMarginsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
     const syncUnauthenticated = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(syncUnauthenticated.status, 401);
     const syncInvalid = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer valid-smoke-access-token" }, body: "{}" });
