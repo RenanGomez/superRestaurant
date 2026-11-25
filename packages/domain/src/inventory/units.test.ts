@@ -10,7 +10,7 @@ import {
   InvalidInventoryQuantityError,
   InvalidInventoryUnitError,
   parseInventoryUnit,
-  unitsAreEqual,
+  unitsAreCompatible,
 } from "./units.js";
 
 test("parseInventoryUnit accepts only the three declared inventory units", () => {
@@ -45,6 +45,13 @@ test("convertPurchaseQuantity multiplies whole quantities by a positive whole fa
   });
 });
 
+test("assertInventoryQuantity rejects integers beyond the safe integer limit", () => {
+  assert.equal(Number.isInteger(2 ** 53), true);
+  assert.equal(Number.isSafeInteger(2 ** 53), false);
+  assert.throws(() => assertInventoryQuantity(2 ** 53), InvalidInventoryQuantityError);
+  assert.throws(() => convertPurchaseQuantity(2 ** 53, 1), InvalidInventoryQuantityError);
+});
+
 test("applyFraction uses integer arithmetic with half-up rounding and remainder audit", () => {
   assert.deepEqual(applyFraction(150, 1, 2), { quantity: 75, remainder: 0 });
   assert.deepEqual(applyFraction(151, 1, 2), { quantity: 76, remainder: 1 });
@@ -65,9 +72,9 @@ test("applyFraction uses integer arithmetic with half-up rounding and remainder 
   });
 });
 
-test("unitsAreEqual compares identical inventory units", () => {
-  assert.equal(unitsAreEqual("g", "g"), true);
-  assert.equal(unitsAreEqual("piece", "piece"), true);
-  assert.equal(unitsAreEqual("g", "ml"), false);
-  assert.equal(unitsAreEqual("ml", "piece"), false);
+test("unitsAreCompatible compares identical inventory units", () => {
+  assert.equal(unitsAreCompatible("g", "g"), true);
+  assert.equal(unitsAreCompatible("piece", "piece"), true);
+  assert.equal(unitsAreCompatible("g", "ml"), false);
+  assert.equal(unitsAreCompatible("ml", "piece"), false);
 });

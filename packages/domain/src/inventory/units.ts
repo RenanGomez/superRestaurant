@@ -119,6 +119,9 @@ export function applyFraction(
   return { quantity: rounded, remainder: residual };
 }
 
-export function unitsAreEqual(left: InventoryUnit, right: InventoryUnit): boolean {
+/**
+ * Compares that both sides are the same inventory unit.
+ */
+export function unitsAreCompatible(left: InventoryUnit, right: InventoryUnit): boolean {
   return left === right;
 }
