@@ -9,6 +9,7 @@ import { BrandMark } from "../../components/brand-mark";
 const links = [
   { href: "/app/tables", label: "Mesas", icon: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M8 4v16M16 4v16M3 10h18" /></> },
   { href: "/app/menu", label: "Menú", icon: <><path d="M4 5h16M4 12h16M4 19h10" /><circle cx="18" cy="19" r="2" /></> },
+  { href: "/app/inventario", label: "Inventario", icon: <><path d="M3 8l9-5 9 5-9 5-9-5Z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></> },
   { href: "/app/caja", label: "Caja", icon: <><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 9h10M7 13h3M14 13h3" /></> },
   { href: "/app/orders", label: "Órdenes", icon: <><path d="M6 3h9l3 3v15H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></> },
   { href: "/app/deliveries", label: "Entregas", icon: <><path d="M3 8h11v10H3zM14 11h4l3 4v3h-7z" /><circle cx="7" cy="19" r="2" /><circle cx="18" cy="19" r="2" /></> },
