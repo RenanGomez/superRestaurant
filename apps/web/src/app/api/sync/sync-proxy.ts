@@ -1,6 +1,6 @@
 import { parseSyncScopeV1, type BranchScope } from "@super-restaurant/shared-types";
 
-const SYNC_ACTIONS: ReadonlySet<string> = new Set(["push", "pull", "snapshot"]);
+const SYNC_ACTIONS: ReadonlySet<string> = new Set(["push", "pull", "snapshot", "devices"]);
 /** Request body cap: the engine already bounds batches, this only rejects abuse. */
 export const SYNC_PROXY_MAX_BODY_BYTES = 8 * 1024 * 1024;
 const JSON_CONTENT_TYPE = /^application\/json(?:\s*;|$)/iu;

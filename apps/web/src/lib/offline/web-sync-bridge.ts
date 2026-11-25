@@ -27,6 +27,7 @@ import {
   DeviceSyncEngine,
   isTerminalState,
   SyncEngineError,
+  SyncTransportError,
   type CapabilityPreconditions,
   type ClockPort,
   type DurableSyncStoragePort,
@@ -169,6 +170,22 @@ export function stableEntityId(parts: readonly string[]): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+/**
+ * Sync device identity is derived per `(browser installation, actor)`: the server
+ * pins a registered device row to the first actor (`on conflict do nothing`) and
+ * keeps `sync_device_state` per actor, so sharing one browser id across cashiers of
+ * the same tablet left every later actor `unknown`/403. The base browser identity in
+ * localStorage is untouched; only the identifier sent to the API/engine changes, so
+ * replica and outbox stay per actor and a shift change cannot leak evidence.
+ * The version/variant nibbles are rewritten to a valid v4 UUID for the API contract.
+ */
+export function syncDeviceIdForActor(baseDeviceId: string, actorId: string): string {
+  const derived = stableEntityId([baseDeviceId, actorId]);
+  const versioned = `${derived.slice(0, 14)}4${derived.slice(15)}`;
+  const variant = ["8", "9", "a", "b"][Number.parseInt(versioned.slice(19, 20), 16) & 0x3] ?? "8";
+  return `${versioned.slice(0, 19)}${variant}${versioned.slice(20)}`;
+}
+
 function toEventItem(entry: OutboxEntry): SyncUiEventItem {
   const payload = entry.payload as Readonly<Record<string, unknown>>;
   const summaryLabel = typeof payload["summaryLabel"] === "string" ? payload["summaryLabel"] : null;
@@ -283,6 +300,8 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   let closing = false;
   let activeCommits = 0;
   const commitWaiters: Array<() => void> = [];
+  /** In-memory only: a registered scope survives for this bridge session, never on disk. */
+  const registeredScopes = new Set<string>();
 
   const engine = new DeviceSyncEngine({
     clientType: "web_pos",
@@ -342,12 +361,38 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
     notify();
   };
 
+  /**
+   * Registers this device in the scope before the first push of the session. An
+   * unregistered device is rejected by the server as `DEVICE_REVOKED`, which the
+   * engine turns into a revoked scope that never drains. Registration is retried
+   * on the next sync until it succeeds, and a hard `401`/`403` blocks the push
+   * instead of sending data the server will reject.
+   */
+  const ensureDeviceRegistered = async (scope: BranchScope): Promise<boolean> => {
+    const key = scopeKey(scope);
+    if (registeredScopes.has(key)) return true;
+    const registerDevice = options.transport.registerDevice;
+    if (registerDevice === undefined) return true;
+    try {
+      await registerDevice({ deviceId: options.deviceId, scope });
+      registeredScopes.add(key);
+      return true;
+    } catch (error) {
+      const nonRetryable = error instanceof SyncTransportError && !error.retryable;
+      connectivityRef.current = nonRetryable
+        ? "sync_blocked"
+        : connectivityRef.current === "offline" ? "offline" : "degraded";
+      return false;
+    }
+  };
+
   const syncNow = (scope: BranchScope): Promise<void> => {
     if (syncPromise !== undefined) return syncPromise;
     const run = (async (): Promise<void> => {
       syncing = true;
       notify();
       try {
+        if (!(await ensureDeviceRegistered(scope))) return;
         if (options.actorId !== undefined) {
           // Defence in depth for a shared/legacy store: never hand this actor's
           // token a batch that contains another actor's unconfirmed evidence.

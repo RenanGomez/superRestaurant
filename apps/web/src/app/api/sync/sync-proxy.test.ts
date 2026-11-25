@@ -144,3 +144,21 @@ test("reenvía el cuerpo validado con el token del servidor", async () => {
   assert.equal(received?.accessToken, "server-token");
   assert.equal(received?.body, body);
 });
+
+test("acepta el registro de dispositivos y lo reenvía al API", async () => {
+  let received: { action: string; accessToken: string; body: string } | undefined;
+  const body = JSON.stringify({ deviceId: "44444444-4444-4444-8444-444444444444", scope: scopeA });
+  const response = await handleSyncProxyRequest(
+    request(body),
+    "devices",
+    deps({
+      forward: (input) => {
+        received = input;
+        return Promise.resolve(new Response(JSON.stringify({ status: "active" }), { status: 200 }));
+      },
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(received?.action, "devices");
+  assert.equal(received?.body, body);
+});

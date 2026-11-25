@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import type { BranchScope } from "@super-restaurant/shared-types";
 
 import { createWebSyncTransport } from "../lib/offline/sync-transport";
-import { openWebSyncBridge, type WebSyncBridgeHandle } from "../lib/offline/web-sync-bridge";
+import { openWebSyncBridge, syncDeviceIdForActor, type WebSyncBridgeHandle } from "../lib/offline/web-sync-bridge";
 
 const DEVICE_ID_STORAGE_KEY = "sr-web-device-id";
 const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -50,8 +50,12 @@ export function OfflineRuntimeMount({ scope, actorId }: OfflineRuntimeMountProps
 
   useEffect(() => {
     if (restaurantId === undefined || branchId === undefined || userId === undefined) return undefined;
-    const deviceId = resolveDeviceId();
-    if (deviceId === undefined) return undefined;
+    const baseDeviceId = resolveDeviceId();
+    if (baseDeviceId === undefined) return undefined;
+    // The server binds a sync device row to its actor, so the id sent to the API must
+    // be per (tablet, actor). Derived with the bridge's deterministic hash; the browser
+    // identity in localStorage stays shared and the store stays per actor.
+    const deviceId = syncDeviceIdForActor(baseDeviceId, userId);
 
     const activeScope = Object.freeze({ branchId, restaurantId });
     let disposed = false;
@@ -63,7 +67,7 @@ export function OfflineRuntimeMount({ scope, actorId }: OfflineRuntimeMountProps
       accessToken: () => Promise.resolve(SAME_ORIGIN_PROXY_TOKEN),
       apiBaseUrl: window.location.origin,
       canSend: () => !released,
-      paths: { pull: "/api/sync/pull", push: "/api/sync/push", snapshot: "/api/sync/snapshot" },
+      paths: { devices: "/api/sync/devices", pull: "/api/sync/pull", push: "/api/sync/push", snapshot: "/api/sync/snapshot" },
       timeoutMs: 30_000,
     });
 

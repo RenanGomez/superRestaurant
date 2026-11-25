@@ -133,6 +133,7 @@ import { SyncMergeExecutor } from "./sync/sync-merge-executor.js";
 import { SyncPushService } from "./sync/sync-push.service.js";
 import { SyncController } from "./sync/sync.controller.js";
 import { SyncCursor } from "./sync/sync-cursor.js";
+import { SyncDeviceService } from "./sync/sync-device.service.js";
 import { SyncPullService } from "./sync/sync-pull.service.js";
 import { SyncManualReviewService } from "./sync/sync-manual-review.service.js";
 import { SyncReviewController } from "./sync/sync-review.controller.js";
@@ -180,6 +181,7 @@ import { SyncReviewController } from "./sync/sync-review.controller.js";
     SyncMergeExecutor,
     { provide: SyncCursor, useFactory: () => new SyncCursor(process.env.SYNC_CURSOR_SECRET ?? "") },
     SyncPullService,
+    SyncDeviceService,
     SyncManualReviewService,
     { provide: SyncPushService, useFactory: (executor: SyncMergeExecutor) => new SyncPushService(executor, { omitted: (facts) => Logger.log(JSON.stringify(facts), "SyncPush") }), inject: [SyncMergeExecutor] },
     PostgresMembershipLookup,
