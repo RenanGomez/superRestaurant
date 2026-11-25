@@ -78,7 +78,13 @@ export async function createCustomerWithAddress(context: HttpFlowContext, postal
 
 export interface CaptureLine { readonly fraction?: unknown; readonly lineId: string; readonly productId: string; readonly quantity: number; readonly variantId: string | null; }
 
-export interface CapturedOrder { readonly captureDraftId: string; readonly orderId: string; readonly workspace: Json; }
+export interface CapturedOrder {
+  readonly captureDraftId: string;
+  /** Exact confirm command body; re-sending it unchanged is the replay path. */
+  readonly confirm: Json;
+  readonly orderId: string;
+  readonly workspace: Json;
+}
 
 /**
  * Phone capture end to end through the real endpoints: draft -> customer -> (delivery: address, quote) ->
@@ -116,10 +122,11 @@ export async function captureAndConfirm(context: HttpFlowContext, input: {
     workspace = ok(await context.send("cashier", "POST", "/captures/payment-intent", { ...command(), ...input.paymentIntent }), "capture_payment_intent");
     detail = record(workspace.detail);
   }
-  const confirmed = ok(await context.send("cashier", "POST", "/captures/confirm", { ...context.audit(), schemaVersion: 2, scope: context.scope,
-    captureDraftId, expectedVersion: detail.version, attentionLeaseId, orderId, shiftId: input.shiftId, tableId: null, currency: "MXN", timeZone: TIME_ZONE }), "capture_confirm");
+  const confirm = { ...context.audit(), schemaVersion: 2, scope: context.scope,
+    captureDraftId, expectedVersion: detail.version, attentionLeaseId, orderId, shiftId: input.shiftId, tableId: null, currency: "MXN", timeZone: TIME_ZONE };
+  const confirmed = ok(await context.send("cashier", "POST", "/captures/confirm", confirm), "capture_confirm");
   assert.equal(record(confirmed.detail).confirmedOrderId, orderId);
-  return { captureDraftId, orderId, workspace };
+  return { captureDraftId, confirm, orderId, workspace };
 }
 
 /**
