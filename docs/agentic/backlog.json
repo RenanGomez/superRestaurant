@@ -1591,7 +1591,7 @@
                       "paths":  [
                                     "apps/web/src/app/app/inventario"
                                 ],
-                      "note":  "PR #99: pestanas Insumos/Almacenes con alta/edicion y P2/P3 de la revision corregidos. Faltan movimientos, conteo, recetas, compras y alertas, mas la verificacion visual real."
+                      "note":  "PR #99 Insumos/Almacenes, #108 Movimientos (ajuste/merma/transferencia) y #109 Recetas (publicar versiones). Faltan Compras, Alertas y la verificacion visual real (desktop y 390x844)."
                   },
                   {
                       "attempts":  0,
