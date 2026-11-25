@@ -80,6 +80,13 @@ export function convertPurchaseQuantity(quantity: number, factor: number): numbe
   return converted;
 }
 
+/**
+ * Applies a fraction to a whole inventory quantity using integer math.
+ *
+ * `quantity` is the rounded result (half-up) of `(quantity * numerator) / denominator`.
+ * `remainder` is the exact leftover of `(quantity * numerator) % denominator`
+ * (0 … denominator - 1) that was not applied to the rounded quantity.
+ */
 export function applyFraction(
   quantity: number,
   numerator: number,
@@ -109,9 +116,9 @@ export function applyFraction(
     throw new InvalidInventoryQuantityError(rounded);
   }
 
-  return { quantity: rounded, remainder: 1 };
+  return { quantity: rounded, remainder: residual };
 }
 
-export function unitsAreCompatible(left: InventoryUnit, right: InventoryUnit): boolean {
+export function unitsAreEqual(left: InventoryUnit, right: InventoryUnit): boolean {
   return left === right;
 }

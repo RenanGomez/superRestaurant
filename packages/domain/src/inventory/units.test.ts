@@ -10,7 +10,7 @@ import {
   InvalidInventoryQuantityError,
   InvalidInventoryUnitError,
   parseInventoryUnit,
-  unitsAreCompatible,
+  unitsAreEqual,
 } from "./units.js";
 
 test("parseInventoryUnit accepts only the three declared inventory units", () => {
@@ -40,6 +40,9 @@ test("convertPurchaseQuantity multiplies whole quantities by a positive whole fa
   assert.throws(() => convertPurchaseQuantity(5, -2), InvalidInventoryFactorError);
   assert.throws(() => convertPurchaseQuantity(5, 1.5), InvalidInventoryFactorError);
   assert.throws(() => convertPurchaseQuantity(-1, 2), InvalidInventoryQuantityError);
+  assert.throws(() => convertPurchaseQuantity(Number.MAX_SAFE_INTEGER, 2), (error: unknown) => {
+    return error instanceof InvalidInventoryQuantityError && error.code === "INVALID_INVENTORY_QUANTITY";
+  });
 });
 
 test("applyFraction uses integer arithmetic with half-up rounding and remainder audit", () => {
@@ -48,6 +51,7 @@ test("applyFraction uses integer arithmetic with half-up rounding and remainder 
   assert.deepEqual(applyFraction(1, 1, 2), { quantity: 1, remainder: 1 });
   assert.deepEqual(applyFraction(3, 1, 3), { quantity: 1, remainder: 0 });
   assert.deepEqual(applyFraction(10, 1, 3), { quantity: 3, remainder: 1 });
+  assert.deepEqual(applyFraction(11, 1, 3), { quantity: 4, remainder: 2 });
   assert.throws(() => applyFraction(150, 1, 0), InvalidInventoryFractionError);
   assert.throws(() => applyFraction(150, 0, 2), InvalidInventoryFractionError);
   assert.throws(() => applyFraction(150, -1, 2), InvalidInventoryFractionError);
@@ -56,11 +60,14 @@ test("applyFraction uses integer arithmetic with half-up rounding and remainder 
     return error instanceof InvalidInventoryFractionError && error.code === "INVALID_INVENTORY_FRACTION";
   });
   assert.throws(() => applyFraction(-1, 1, 2), InvalidInventoryQuantityError);
+  assert.throws(() => applyFraction(Number.MAX_SAFE_INTEGER, 2, 1), (error: unknown) => {
+    return error instanceof InvalidInventoryQuantityError && error.code === "INVALID_INVENTORY_QUANTITY";
+  });
 });
 
-test("unitsAreCompatible compares the unit dimension", () => {
-  assert.equal(unitsAreCompatible("g", "g"), true);
-  assert.equal(unitsAreCompatible("piece", "piece"), true);
-  assert.equal(unitsAreCompatible("g", "ml"), false);
-  assert.equal(unitsAreCompatible("ml", "piece"), false);
+test("unitsAreEqual compares identical inventory units", () => {
+  assert.equal(unitsAreEqual("g", "g"), true);
+  assert.equal(unitsAreEqual("piece", "piece"), true);
+  assert.equal(unitsAreEqual("g", "ml"), false);
+  assert.equal(unitsAreEqual("ml", "piece"), false);
 });
