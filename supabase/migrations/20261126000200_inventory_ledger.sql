@@ -47,6 +47,11 @@ create unique index inventory_movements_source_unique
   on app.inventory_movements (restaurant_id, source_type, source_id, kind, item_id)
   where source_id is not null;
 
+-- One reversal per compensated movement (backstop for the advisory lock in the writer).
+create unique index inventory_movements_reversal_unique
+  on app.inventory_movements (compensates_movement_id)
+  where kind = 'sale_reversal' and compensates_movement_id is not null;
+
 create index inventory_movements_balance_idx
   on app.inventory_movements (warehouse_id, item_id, occurred_at, id);
 
@@ -189,6 +194,10 @@ begin
     if p_compensates_movement_id is null then
       raise exception using errcode = '22000', message = 'INVENTORY_REVERSAL_INVALID';
     end if;
+
+    -- Serialize concurrent reversals of the same consumption: the exists() check below is
+    -- TOCTOU under READ COMMITTED without this transaction-scoped advisory lock.
+    perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_compensates_movement_id::text, 0));
 
     select m.* into v_compensated
     from app.inventory_movements as m
