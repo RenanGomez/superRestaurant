@@ -1,12 +1,24 @@
-import { parseDurableState, type DurableSyncState, type DurableSyncStoragePort } from "@super-restaurant/sync-engine";
+import {
+  parseDurableState,
+  type DurableSyncState,
+  type DurableSyncStoragePort,
+  type ReplicaEntity,
+  type SyncScopeInput,
+} from "@super-restaurant/sync-engine";
 
 const META = "sr_device_meta";
 const SLOTS = "sr_state_slots";
 const KEYS = "sr_crypto_keys";
 const encoder = new TextEncoder();
 
-type Meta = { activeSlot: number; generation: number; sequence: number; keyVersion: number; locked: boolean; quarantined: boolean };
-type Slot = { ciphertext: ArrayBuffer; iv: Uint8Array; generation: number; keyVersion: number };
+type Meta = { activeSlot: number; generation: number; sequence: number; keyVersion: number; locked: boolean; quarantined: boolean; scope: string };
+type Slot = { ciphertext: ArrayBuffer; iv: Uint8Array; generation: number; keyVersion: number; scope: string };
+export interface WebSyncPurgeOutcome {
+  readonly wiped: boolean;
+  readonly removedReplicaCount: number;
+  readonly retainedOutboxCount: number;
+  readonly retainedScopeCount: number;
+}
 export class WebSyncStorageError extends Error {
   public readonly retryable: boolean;
   public constructor(public readonly code: string) { super(code); this.name = "WebSyncStorageError"; this.retryable = code === "STORAGE_LOAD_FAILED"; }
@@ -22,9 +34,13 @@ function storageError(error: unknown): WebSyncStorageError {
   if (error instanceof WebSyncStorageError) return error;
   return new WebSyncStorageError(error instanceof DOMException && error.name === "QuotaExceededError" ? "STORAGE_QUOTA_EXCEEDED" : "STORAGE_COMMIT_FAILED");
 }
-function aad(deviceId: string, keyVersion: number, generation: number): Uint8Array<ArrayBuffer> {
-  return encoder.encode(`sr-sync-v1|${deviceId}|1|${keyVersion}|${generation}`);
+function scopeBinding(state: Pick<DurableSyncState, "scopes">): string {
+  return state.scopes.map((scope) => `${scope.restaurantId}|${scope.branchId}`).sort().join(",");
 }
+function aad(deviceId: string, keyVersion: number, generation: number, scope: string): Uint8Array<ArrayBuffer> {
+  return encoder.encode(`sr-sync-v2|${deviceId}|${keyVersion}|${generation}|${scope}`);
+}
+const WIPED_OUTCOME: WebSyncPurgeOutcome = Object.freeze({ wiped: true, removedReplicaCount: 0, retainedOutboxCount: 0, retainedScopeCount: 0 });
 
 /** IndexedDB stores ciphertext and its non-extractable key in the same origin. This does not protect against XSS.
  * Web Locks serialize individual operations. After STORAGE_COMMIT_FAILED, discard the engine,
@@ -77,13 +93,57 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     const [value] = await Promise.all([request(tx.objectStore(store).get(key) as IDBRequest<T | undefined>), done]);
     return value;
   }
-  private async quarantine(): Promise<void> {
+  private async markQuarantined(): Promise<void> {
     const tx = this.db.transaction(META, "readwrite");
     const done = finished(tx);
     const store = tx.objectStore(META);
     const meta = await request(store.get(this.deviceId) as IDBRequest<Meta | undefined>);
     if (meta) store.put({ ...meta, quarantined: true }, this.deviceId);
     await done;
+  }
+  public quarantine(): Promise<void> {
+    return this.exclusive(() => this.markQuarantined()).catch((error: unknown) => { throw storageError(error); });
+  }
+  public lock(): Promise<void> {
+    return this.exclusive(async () => {
+      const meta = await this.read<Meta>(META, this.deviceId);
+      if (!meta) return;
+      const tx = this.db.transaction(META, "readwrite", { durability: "strict" });
+      const done = finished(tx);
+      const store = tx.objectStore(META);
+      const current = await request(store.get(this.deviceId) as IDBRequest<Meta | undefined>);
+      if (!current) { tx.abort(); await done.catch(() => undefined); return; }
+      try { store.put({ ...current, locked: true } satisfies Meta, this.deviceId); }
+      catch (error) { tx.abort(); await done.catch(() => undefined); throw error; }
+      await done;
+    }).catch((error: unknown) => { throw storageError(error); });
+  }
+  private async decrypt(meta: Meta): Promise<DurableSyncState> {
+    let slot: Slot | undefined;
+    let key: CryptoKey | undefined;
+    try {
+      slot = await this.read<Slot>(SLOTS, [this.deviceId, meta.activeSlot]);
+      key = await this.read<CryptoKey>(KEYS, [this.deviceId, meta.keyVersion]);
+    } catch { throw new WebSyncStorageError("STORAGE_LOAD_FAILED"); }
+    try {
+      if (!slot || !key || key.extractable || slot.generation !== meta.generation || slot.keyVersion !== meta.keyVersion || slot.scope !== meta.scope || !(slot.iv instanceof Uint8Array) || slot.iv.length !== 12) throw new WebSyncStorageError("STATE_CORRUPT");
+      let bytes: ArrayBuffer;
+      try {
+        bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(this.deviceId, slot.keyVersion, slot.generation, meta.scope) }, key, slot.ciphertext);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "OperationError") throw new WebSyncStorageError("STATE_CORRUPT");
+        throw new WebSyncStorageError("STORAGE_LOAD_FAILED");
+      }
+      let raw: unknown;
+      try { raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown; }
+      catch { throw new WebSyncStorageError("STATE_CORRUPT"); }
+      const parsed = parseDurableState(raw, this.deviceId);
+      if (!parsed.ok || parsed.value.lastLocalSequence !== meta.sequence || scopeBinding(parsed.value) !== meta.scope) throw new WebSyncStorageError("STATE_CORRUPT");
+      return parsed.value;
+    } catch (error) {
+      if (error instanceof WebSyncStorageError && error.code === "STATE_CORRUPT") await this.markQuarantined();
+      throw error;
+    }
   }
   public loadState(deviceId: string): Promise<unknown> {
     if (deviceId !== this.deviceId) return Promise.reject(new WebSyncStorageError("DEVICE_MISMATCH"));
@@ -95,32 +155,9 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
       }
       if (meta.quarantined) throw new WebSyncStorageError("STORAGE_QUARANTINED");
       if (meta.locked) throw new WebSyncStorageError("STORAGE_LOCKED");
-      let slot: Slot | undefined;
-      let key: CryptoKey | undefined;
-      try {
-        slot = await this.read<Slot>(SLOTS, [deviceId, meta.activeSlot]);
-        key = await this.read<CryptoKey>(KEYS, [deviceId, meta.keyVersion]);
-      } catch { throw new WebSyncStorageError("STORAGE_LOAD_FAILED"); }
-      try {
-        if (!slot || !key || key.extractable || slot.generation !== meta.generation || slot.keyVersion !== meta.keyVersion || !(slot.iv instanceof Uint8Array) || slot.iv.length !== 12) throw new WebSyncStorageError("STATE_CORRUPT");
-        let bytes: ArrayBuffer;
-        try {
-          bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(deviceId, slot.keyVersion, slot.generation) }, key, slot.ciphertext);
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "OperationError") throw new WebSyncStorageError("STATE_CORRUPT");
-          throw new WebSyncStorageError("STORAGE_LOAD_FAILED");
-        }
-        let raw: unknown;
-        try { raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown; }
-        catch { throw new WebSyncStorageError("STATE_CORRUPT"); }
-        const parsed = parseDurableState(raw, deviceId);
-        if (!parsed.ok || parsed.value.lastLocalSequence !== meta.sequence) throw new WebSyncStorageError("STATE_CORRUPT");
-        this.generation = meta.generation;
-        return parsed.value;
-      } catch (error) {
-        if (error instanceof WebSyncStorageError && error.code === "STATE_CORRUPT") await this.quarantine();
-        throw error;
-      }
+      const state = await this.decrypt(meta);
+      this.generation = meta.generation;
+      return state;
     }).catch((error: unknown) => {
       if (error instanceof WebSyncStorageError) throw error;
       throw new WebSyncStorageError("STORAGE_LOAD_FAILED");
@@ -132,11 +169,11 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
       const meta = await this.read<Meta>(META, this.deviceId);
       if (!meta?.quarantined || meta.generation < 2) return null;
       const slot = await this.read<Slot>(SLOTS, [this.deviceId, 1 - meta.activeSlot]);
-      if (!slot || slot.generation !== meta.generation - 1) return null;
+      if (!slot || slot.generation !== meta.generation - 1 || slot.scope !== meta.scope) return null;
       const key = await this.read<CryptoKey>(KEYS, [this.deviceId, slot.keyVersion]);
       if (!key || key.extractable) return null;
       try {
-        const bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(this.deviceId, slot.keyVersion, slot.generation) }, key, slot.ciphertext);
+        const bytes = await this.crypto.subtle.decrypt({ name: "AES-GCM", iv: slot.iv as Uint8Array<ArrayBuffer>, additionalData: aad(this.deviceId, slot.keyVersion, slot.generation, meta.scope) }, key, slot.ciphertext);
         const parsed = parseDurableState(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, this.deviceId);
         return parsed.ok ? parsed.value : null;
       } catch (error) {
@@ -157,11 +194,12 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
         if (state.lastLocalSequence < (meta?.sequence ?? 0)) throw new WebSyncStorageError("SEQUENCE_REGRESSION");
         const version = meta?.keyVersion ?? 1;
         const existing = await this.read<CryptoKey>(KEYS, [this.deviceId, version]);
-        if (meta && !existing) { await this.quarantine(); throw new WebSyncStorageError("STATE_CORRUPT"); }
+        if (meta && !existing) { await this.markQuarantined(); throw new WebSyncStorageError("STATE_CORRUPT"); }
         const key = existing ?? await this.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
         const generation = (meta?.generation ?? 0) + 1;
+        const binding = scopeBinding(parsed.value);
         const iv = this.crypto.getRandomValues(new Uint8Array(12));
-        const ciphertext = await this.crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad(this.deviceId, version, generation) }, key, encoder.encode(JSON.stringify(parsed.value)));
+        const ciphertext = await this.crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad(this.deviceId, version, generation, binding) }, key, encoder.encode(JSON.stringify(parsed.value)));
         const activeSlot = meta ? 1 - meta.activeSlot : 0;
         const tx = this.db.transaction([META, SLOTS, KEYS], "readwrite", { durability: "strict" });
         const done = finished(tx);
@@ -169,12 +207,100 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
         if ((current?.generation ?? 0) !== (meta?.generation ?? 0) || current?.locked || current?.quarantined) { tx.abort(); await done.catch(() => undefined); throw new WebSyncStorageError("STALE_STATE"); }
         try {
         tx.objectStore(KEYS).put(key, [this.deviceId, version]);
-        tx.objectStore(SLOTS).put({ ciphertext, iv, generation, keyVersion: version } satisfies Slot, [this.deviceId, activeSlot]);
-        tx.objectStore(META).put({ activeSlot, generation, sequence: state.lastLocalSequence, keyVersion: version, locked: false, quarantined: false } satisfies Meta, this.deviceId);
+        tx.objectStore(SLOTS).put({ ciphertext, iv, generation, keyVersion: version, scope: binding } satisfies Slot, [this.deviceId, activeSlot]);
+        tx.objectStore(META).put({ activeSlot, generation, sequence: state.lastLocalSequence, keyVersion: version, locked: false, quarantined: false, scope: binding } satisfies Meta, this.deviceId);
         } catch (error) { tx.abort(); await done.catch(() => undefined); throw error; }
         await done;
         this.generation = generation;
       } catch (error) { throw storageError(error); }
     });
+  }
+  private async nextKeyVersion(meta: Meta): Promise<number> {
+    let version = meta.keyVersion + 1;
+    while (await this.read<CryptoKey>(KEYS, [this.deviceId, version])) version += 1;
+    return version;
+  }
+  private async reencrypt(state: DurableSyncState, meta: Meta): Promise<{ readonly generation: number; readonly keyVersion: number }> {
+    const binding = scopeBinding(state);
+    const keyVersion = await this.nextKeyVersion(meta);
+    const generation = meta.generation + 1;
+    const key = await this.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    const iv = this.crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await this.crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: aad(this.deviceId, keyVersion, generation, binding) }, key, encoder.encode(JSON.stringify(state)));
+    const tx = this.db.transaction([META, SLOTS, KEYS], "readwrite", { durability: "strict" });
+    const done = finished(tx);
+    const current = await request(tx.objectStore(META).get(this.deviceId) as IDBRequest<Meta | undefined>);
+    if (!current || current.generation !== meta.generation || current.keyVersion !== meta.keyVersion) { tx.abort(); await done.catch(() => undefined); throw new WebSyncStorageError("STALE_STATE"); }
+    try {
+      tx.objectStore(KEYS).put(key, [this.deviceId, keyVersion]);
+      tx.objectStore(SLOTS).put({ ciphertext, iv, generation, keyVersion, scope: binding } satisfies Slot, [this.deviceId, current.activeSlot]);
+      tx.objectStore(META).put({ ...current, generation, keyVersion, scope: binding }, this.deviceId);
+      tx.objectStore(KEYS).delete([this.deviceId, meta.keyVersion]);
+    } catch (error) { tx.abort(); await done.catch(() => undefined); throw error; }
+    await done;
+    return { generation, keyVersion };
+  }
+  public rotateKey(): Promise<void> {
+    return this.exclusive(async () => {
+      try {
+        const meta = await this.read<Meta>(META, this.deviceId);
+        if (!meta) {
+          if (await this.read<CryptoKey>(KEYS, [this.deviceId, 1]) || await this.read<Slot>(SLOTS, [this.deviceId, 0]) || await this.read<Slot>(SLOTS, [this.deviceId, 1])) throw new WebSyncStorageError("STATE_CORRUPT");
+          return;
+        }
+        if (meta.quarantined) throw new WebSyncStorageError("STORAGE_QUARANTINED");
+        const state = await this.decrypt(meta);
+        const next = await this.reencrypt(state, meta);
+        this.generation = next.generation;
+      } catch (error) { throw storageError(error); }
+    });
+  }
+  private async wipeRows(): Promise<void> {
+    const tx = this.db.transaction([META, SLOTS, KEYS], "readwrite", { durability: "strict" });
+    const done = finished(tx);
+    tx.objectStore(META).delete(this.deviceId);
+    tx.objectStore(SLOTS).delete([this.deviceId, 0]);
+    tx.objectStore(SLOTS).delete([this.deviceId, 1]);
+    const keys = tx.objectStore(KEYS);
+    const cursor = keys.openCursor();
+    cursor.onsuccess = () => {
+      const current = cursor.result;
+      if (!current) return;
+      if (Array.isArray(current.key) && current.key[0] === this.deviceId) current.delete();
+      current.continue();
+    };
+    await done;
+    this.generation = null;
+  }
+  private purgeReplica(shouldRemove: (entity: ReplicaEntity) => boolean): Promise<WebSyncPurgeOutcome> {
+    return this.exclusive(async () => {
+      try {
+        const meta = await this.read<Meta>(META, this.deviceId);
+        if (!meta) { await this.wipeRows(); return WIPED_OUTCOME; }
+        const state = await this.decrypt(meta);
+        const replica = state.replica.filter((entity) => !shouldRemove(entity));
+        const removedReplicaCount = state.replica.length - replica.length;
+        const parsed = parseDurableState({ ...state, replica }, this.deviceId);
+        if (!parsed.ok) throw new WebSyncStorageError("STATE_CORRUPT");
+        if (parsed.value.outbox.length === 0 && parsed.value.replica.length === 0) {
+          await this.wipeRows();
+          return Object.freeze({ wiped: true, removedReplicaCount, retainedOutboxCount: 0, retainedScopeCount: 0 });
+        }
+        const next = await this.reencrypt(parsed.value, meta);
+        this.generation = next.generation;
+        return Object.freeze({
+          wiped: false,
+          removedReplicaCount,
+          retainedOutboxCount: parsed.value.outbox.length,
+          retainedScopeCount: parsed.value.scopes.length,
+        });
+      } catch (error) { throw storageError(error); }
+    });
+  }
+  public purgeForScope(scope: SyncScopeInput): Promise<WebSyncPurgeOutcome> {
+    return this.purgeReplica((entity) => entity.restaurantId === scope.restaurantId && entity.branchId === scope.branchId);
+  }
+  public purgeAll(): Promise<WebSyncPurgeOutcome> {
+    return this.purgeReplica(() => true);
   }
 }
