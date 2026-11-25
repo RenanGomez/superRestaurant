@@ -137,12 +137,22 @@ test("parseInventoryItemV1 accepts a valid item", () => {
   assert.ok(parseInventoryItemV1(validItem()));
 });
 
+test("parseInventoryItemV1 enforces the database name length of 160 characters", () => {
+  assert.ok(parseInventoryItemV1(validItem({ name: "a".repeat(160) })));
+  assert.equal(parseInventoryItemV1(validItem({ name: "a".repeat(161) })), undefined);
+});
+
 test("parseInventoryItemV1 rejects an extra key", () => {
   assert.equal(parseInventoryItemV1(validItem({ extra: true })), undefined);
 });
 
 test("parseInventoryWarehouseV1 accepts a valid warehouse", () => {
   assert.ok(parseInventoryWarehouseV1(validWarehouse()));
+});
+
+test("parseInventoryWarehouseV1 enforces the database name length of 160 characters", () => {
+  assert.ok(parseInventoryWarehouseV1(validWarehouse({ name: "a".repeat(160) })));
+  assert.equal(parseInventoryWarehouseV1(validWarehouse({ name: "a".repeat(161) })), undefined);
 });
 
 test("parseInventoryWarehouseV1 rejects a missing key", () => {
