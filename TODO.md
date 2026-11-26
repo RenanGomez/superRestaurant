@@ -301,11 +301,11 @@ Bug SQL candidato corregido y verificado rollback-only: coordenadas de Address/f
 
 ## Fase 4 — Inventario y compras
 
-- [ ] **TODO · P4** — Implementar insumos, almacenes y movimientos de inventario.
-- [ ] **TODO · P4** — Implementar recetas y descuento automático por venta.
-- [ ] **TODO · P4** — Implementar proveedores, órdenes de compra y recepción.
-- [ ] **TODO · P4** — Implementar alertas de stock mínimo.
-- [ ] **TODO · P4** — Implementar costeo promedio y margen por platillo.
+- [x] **P4 · DONE (2026-11-26)** — Insumos, almacenes y movimientos de inventario: API, SQL y pestañas Insumos/Almacenes/Movimientos; el `EXECUTE` del ledger crudo quedó cerrado a `app_api`. Ver HANDOFF.
+- [x] **P4 · DONE (2026-11-26)** — Recetas versionadas y consumo por venta con reverso (`sale_consumption`/`sale_reversal`); journey 13 en verde contra el stack local.
+- [x] **P4 · DONE (2026-11-26)** — Proveedores, órdenes de compra idempotentes con totales del servidor y recepción con almacén y auditoría.
+- [x] **P4 · DONE (2026-11-26)** — Alertas de saldo bajo mínimo con déficit en la pestaña Alertas y en el API.
+- [x] **P4 · DONE (2026-11-26)** — Costo medio ponderado entero, costo de receta y margen estimado por producto.
 
 ## Fase 5 — Gestión, CRM y personal
 
