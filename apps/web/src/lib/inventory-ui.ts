@@ -5,13 +5,14 @@
 
 import { INVENTORY_UNITS, type InventoryUnitV1, type RecipeLineV1 } from "@super-restaurant/shared-types";
 
-export const INVENTORY_TABS = ["insumos", "recetas", "almacenes", "movimientos"] as const;
+export const INVENTORY_TABS = ["insumos", "recetas", "almacenes", "movimientos", "compras"] as const;
 export type InventoryTab = (typeof INVENTORY_TABS)[number];
 
 export const DEFAULT_INVENTORY_TAB: InventoryTab = "insumos";
 
 export const INVENTORY_TAB_LABELS: Readonly<Record<InventoryTab, string>> = {
   almacenes: "Almacenes",
+  compras: "Compras",
   insumos: "Insumos",
   movimientos: "Movimientos",
   recetas: "Recetas",
@@ -56,6 +57,49 @@ const NUMBER_FORMAT = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 
 /** Formats a whole quantity for display (thousands separated with es-MX rules). */
 export function formatInventoryNumber(value: number): string {
   return NUMBER_FORMAT.format(value);
+}
+
+/** Currencies whose minor-unit scale this screen can display exactly. */
+const PURCHASING_FRACTION_DIGITS: Readonly<Record<string, number>> = Object.freeze({
+  CAD: 2,
+  EUR: 2,
+  JPY: 0,
+  MXN: 2,
+  USD: 2,
+});
+
+/**
+ * Presentation-only money formatter for purchase totals the server already froze. It splits the
+ * exact minor-unit integer with BigInt (never a float division), derives the decimal scale from the
+ * currency and reuses the locale's own symbol, grouping and sign placement. It never adds or
+ * recomputes anything: the number passed in is the server's own `totalMinor`.
+ */
+export function formatMinorUnits(amountMinor: number, currency: string, locale = "es-MX"): string {
+  if (!Number.isSafeInteger(amountMinor)) return "Monto no válido";
+  const normalized = currency.trim().toUpperCase();
+  if (!Object.hasOwn(PURCHASING_FRACTION_DIGITS, normalized)) return "Moneda no admitida";
+  const digits = PURCHASING_FRACTION_DIGITS[normalized] ?? 0;
+  const formatter = new Intl.NumberFormat(locale, { currency: normalized, style: "currency" });
+  const scale = 10n ** BigInt(digits);
+  const negative = amountMinor < 0;
+  const absoluteMinor = negative ? BigInt(-amountMinor) : BigInt(amountMinor);
+  const integerText = new Intl.NumberFormat(locale).format(absoluteMinor / scale);
+  const fractionText = (absoluteMinor % scale).toString().padStart(digits, "0");
+  let integerUsed = false;
+  let fractionUsed = false;
+  return formatter.formatToParts(negative ? -1 : 1).map((part) => {
+    if (part.type === "integer" || part.type === "group") {
+      if (integerUsed) return "";
+      integerUsed = true;
+      return integerText;
+    }
+    if (part.type === "fraction") {
+      if (fractionUsed) return "";
+      fractionUsed = true;
+      return fractionText;
+    }
+    return part.value;
+  }).join("");
 }
 
 /** True when the term appears in the item name or internal key. */
@@ -221,4 +265,99 @@ export function formatRecipeVersionLabel(version: number): string {
 /** Whether a recipe version is the active one or kept only for history. */
 export function recipeVersionStateLabel(active: boolean): string {
   return active ? "Activa" : "Histórica";
+}
+
+export interface SupplierDraft {
+  readonly name: string;
+  readonly contact: string;
+}
+
+export type SupplierValidation =
+  | { readonly ok: true; readonly name: string; readonly contact: string | null }
+  | { readonly ok: false; readonly error: string };
+
+/** Validates the supplier form: name 1..160 characters, contact optional 1..200 or none. */
+export function validateSupplierDraft(draft: SupplierDraft): SupplierValidation {
+  const name = draft.name.trim();
+  if (name.length === 0) return { error: "Escribe el nombre del proveedor.", ok: false };
+  if (name.length > 160) return { error: "El nombre no puede pasar de 160 caracteres.", ok: false };
+  const contact = draft.contact.trim();
+  if (contact.length > 200) return { error: "El contacto no puede pasar de 200 caracteres.", ok: false };
+  return { contact: contact === "" ? null : contact, name, ok: true };
+}
+
+export interface PurchaseOrderLineDraft {
+  readonly itemId: string;
+  readonly quantity: string;
+  readonly unitCode: InventoryUnitV1;
+  readonly unitCostMinor: string;
+}
+
+export interface PurchaseOrderDraft {
+  readonly supplierId: string;
+  readonly currency: string;
+  readonly lines: readonly PurchaseOrderLineDraft[];
+}
+
+export interface ValidatedPurchaseOrderLine {
+  readonly itemId: string;
+  readonly quantity: number;
+  readonly unitCode: InventoryUnitV1;
+  readonly unitCostMinor: number;
+}
+
+export type PurchaseOrderValidation =
+  | { readonly ok: true; readonly currency: string; readonly lines: readonly ValidatedPurchaseOrderLine[] }
+  | { readonly ok: false; readonly error: string };
+
+const ISO_CURRENCY_PATTERN = /^[A-Z]{3}$/u;
+
+/**
+ * Validates the purchase order draft before sending it: supplier, ISO currency, at least one line,
+ * whole positive quantities, a known unit per line, whole non-negative minor costs and no repeated
+ * item. The total is never computed here; the server owns it.
+ */
+export function validatePurchaseOrderDraft(draft: PurchaseOrderDraft): PurchaseOrderValidation {
+  if (draft.supplierId.trim() === "") return { error: "Elige el proveedor.", ok: false };
+  const currency = draft.currency.trim().toUpperCase();
+  if (!ISO_CURRENCY_PATTERN.test(currency)) {
+    return { error: "La moneda debe ser un código ISO de 3 letras, por ejemplo MXN.", ok: false };
+  }
+  if (draft.lines.length === 0) return { error: "Agrega al menos un insumo a la orden.", ok: false };
+  const lines: ValidatedPurchaseOrderLine[] = [];
+  const seen = new Set<string>();
+  for (const line of draft.lines) {
+    if (line.itemId.trim() === "") return { error: "Elige un insumo en cada línea de la orden.", ok: false };
+    if (!(INVENTORY_UNITS as readonly string[]).includes(line.unitCode)) {
+      return { error: "La unidad del insumo no es válida.", ok: false };
+    }
+    const quantity = parseInventoryWholeNumber(line.quantity, 1);
+    if (quantity === undefined) {
+      return { error: "Cada cantidad debe ser un número entero mayor o igual a 1.", ok: false };
+    }
+    const unitCostMinor = parseInventoryWholeNumber(line.unitCostMinor, 0);
+    if (unitCostMinor === undefined) {
+      return { error: "Cada costo unitario debe ser un entero mayor o igual a 0 en la unidad menor.", ok: false };
+    }
+    if (seen.has(line.itemId)) return { error: "No repitas el mismo insumo en la orden.", ok: false };
+    seen.add(line.itemId);
+    lines.push(Object.freeze({ itemId: line.itemId, quantity, unitCode: line.unitCode, unitCostMinor }));
+  }
+  return { currency, lines: Object.freeze(lines), ok: true };
+}
+
+/** Operator-facing name for every purchase order status. Unknown values fall back to a neutral word. */
+export function purchaseOrderStatusLabel(status: string): string {
+  switch (status) {
+    case "draft":
+      return "Borrador";
+    case "sent":
+      return "Enviada";
+    case "received":
+      return "Recibida";
+    case "cancelled":
+      return "Cancelada";
+    default:
+      return "Orden";
+  }
 }
