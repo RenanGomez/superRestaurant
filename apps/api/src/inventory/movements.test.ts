@@ -393,6 +393,14 @@ test("HTTP contract: 401, 400, 201, 200 and 403 for the movement endpoints", asy
     assert.equal(invalid.status, 400);
     assert.deepEqual(await invalid.json(), { code: "INVENTORY_REQUEST_INVALID" });
 
+    const invalidDevice = await fetch(movementsUrl, {
+      method: "POST",
+      body: JSON.stringify(adjustment),
+      headers: { ...authorization, "content-type": "application/json", "x-device-id": "not-a-uuid" },
+    });
+    assert.equal(invalidDevice.status, 400);
+    assert.deepEqual(await invalidDevice.json(), { code: "INVENTORY_REQUEST_INVALID" });
+
     const created = await fetch(movementsUrl, {
       method: "POST",
       body: JSON.stringify(adjustment),

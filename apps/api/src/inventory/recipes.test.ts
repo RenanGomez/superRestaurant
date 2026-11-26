@@ -203,6 +203,7 @@ test("publishRecipe: SQLSTATEs map to request, conflict, authorization and unava
     ["22000", "request"],
     ["23514", "request"],
     ["23503", "conflict"],
+    ["23505", "conflict"],
     ["42501", "authorization"],
   ];
   for (const [state, expected] of cases) {

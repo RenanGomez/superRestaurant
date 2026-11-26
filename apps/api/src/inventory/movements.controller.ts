@@ -24,6 +24,8 @@ import {
   type InventoryTransferResultV1,
 } from "./movements.service.js";
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
 @Controller("inventory")
 export class MovementsController {
   public constructor(
@@ -39,7 +41,11 @@ export class MovementsController {
     @Body() body: unknown,
   ): Promise<InventoryMovementRecordV1 | InventoryTransferResultV1> {
     const principal = getAuthenticatedPrincipal(request);
-    return this.execute(() => this.movements.recordMovement(principal, body, deviceIdHeader(request)));
+    const deviceId = deviceIdHeader(request);
+    if (deviceId !== undefined && !(typeof deviceId === "string" && UUID_PATTERN.test(deviceId))) {
+      throw new BadRequestException({ code: "INVENTORY_REQUEST_INVALID" });
+    }
+    return this.execute(() => this.movements.recordMovement(principal, body, deviceId));
   }
 
   @Get("movements")
