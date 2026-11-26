@@ -10,6 +10,7 @@ import {
   formatInventoryNumber,
   formatInventoryTimestamp,
   formatMinorUnits,
+  formatPercentFromMinor,
   formatRecipeVersionLabel,
   inventoryMovementKindLabel,
   inventoryTabHref,
@@ -20,6 +21,7 @@ import {
   parseInventoryWholeNumber,
   purchaseOrderStatusLabel,
   recipeVersionStateLabel,
+  stockAlertSummary,
   validateInventoryMovementDraft,
   validatePurchaseOrderDraft,
   validateRecipeLineDrafts,
@@ -27,7 +29,7 @@ import {
 } from "./inventory-ui.js";
 
 test("inventory tabs are stable and parse untrusted values", () => {
-  assert.deepEqual(INVENTORY_TABS, ["insumos", "recetas", "almacenes", "movimientos", "compras"]);
+  assert.deepEqual(INVENTORY_TABS, ["insumos", "recetas", "almacenes", "movimientos", "compras", "alertas"]);
   assert.equal(DEFAULT_INVENTORY_TAB, "insumos");
   assert.equal(isInventoryTab("insumos"), true);
   assert.equal(isInventoryTab("recetas"), true);
@@ -37,6 +39,8 @@ test("inventory tabs are stable and parse untrusted values", () => {
   assert.equal(parseInventoryTab("recetas"), "recetas");
   assert.equal(parseInventoryTab("compras"), "compras");
   assert.equal(isInventoryTab("compras"), true);
+  assert.equal(parseInventoryTab("alertas"), "alertas");
+  assert.equal(isInventoryTab("alertas"), true);
   assert.equal(parseInventoryTab("otra"), undefined);
   assert.equal(parseInventoryTab(undefined), undefined);
 });
@@ -85,6 +89,28 @@ test("whole-number parsing rejects decimals, signs and small values", () => {
 test("formatInventoryNumber keeps whole quantities readable", () => {
   assert.equal(formatInventoryNumber(0), "0");
   assert.equal(formatInventoryNumber(12), "12");
+});
+
+test("percent from minor integers rounds half away from zero and guards zero", () => {
+  assert.equal(formatPercentFromMinor(300, 1000), "30%");
+  assert.equal(formatPercentFromMinor(333, 1000), "33.3%");
+  assert.equal(formatPercentFromMinor(335, 1000), "33.5%");
+  assert.equal(formatPercentFromMinor(334, 1000), "33.4%");
+  assert.equal(formatPercentFromMinor(1, 3), "33.3%");
+  assert.equal(formatPercentFromMinor(2, 3), "66.7%");
+  assert.equal(formatPercentFromMinor(-250, 1000), "-25%");
+  assert.equal(formatPercentFromMinor(500, 0), "—");
+  assert.equal(formatPercentFromMinor(1.5, 1000), "—");
+  assert.equal(formatPercentFromMinor(Number.NaN, 1000), "—");
+});
+
+test("stock alerts summarize the shortfall without internal codes", () => {
+  assert.equal(stockAlertSummary({ deficit: 12, unitCode: "g" }), "Faltan 12 gramos");
+  assert.equal(stockAlertSummary({ deficit: 1, unitCode: "piece" }), "Faltan 1 pieza");
+  assert.equal(stockAlertSummary({ deficit: 3, unitCode: "piece" }), "Faltan 3 piezas");
+  assert.equal(stockAlertSummary({ deficit: 2, unitCode: "unknown" }), "Faltan 2 unidades");
+  assert.equal(stockAlertSummary({ deficit: 0, unitCode: "g" }), "Sin déficit");
+  assert.equal(stockAlertSummary({ deficit: -5, unitCode: "g" }), "Sin déficit");
 });
 
 test("movement kinds carry an operator-facing Spanish label", () => {
