@@ -50,6 +50,32 @@ begin
       raise exception 'app_api cannot execute %', function_name;
     end if;
   end loop;
+
+  -- 2b. Each wrapper keeps the hardened shape: postgres-owned SECURITY DEFINER with an empty
+  -- search_path, so app_api can execute it without inheriting a caller-controlled lookup path.
+  foreach function_name in array array[
+    'app_private.list_inventory_items(uuid,uuid)',
+    'app_private.read_inventory_item_for_manage(uuid,uuid)',
+    'app_private.create_inventory_item(uuid,uuid,text,text,text,integer,integer,boolean)',
+    'app_private.update_inventory_item(uuid,uuid,text,text,text,integer,integer,boolean)',
+    'app_private.list_inventory_warehouses(uuid,uuid,uuid)',
+    'app_private.read_inventory_warehouse_for_manage(uuid,uuid)',
+    'app_private.create_inventory_warehouse(uuid,uuid,uuid,text,boolean)',
+    'app_private.update_inventory_warehouse(uuid,uuid,text,boolean)'
+  ] loop
+    if not exists (
+      select 1
+      from pg_catalog.pg_proc as p
+      join pg_catalog.pg_roles as owner on owner.oid = p.proowner
+      where p.oid = pg_catalog.to_regprocedure(function_name)
+        and p.prosecdef
+        and owner.rolname = 'postgres'
+        and coalesce(pg_catalog.array_to_string(p.proconfig, ','), '') in ('search_path=', 'search_path=""')
+    ) then
+      raise exception 'inventory wrapper % is not postgres-owned SECURITY DEFINER with an empty search_path', function_name;
+    end if;
+  end loop;
+
   insert into auth.users(id, email) values
     (manager, 'inventory-api-manager@invalid.test'),
     (cashier, 'inventory-api-cashier@invalid.test'),
