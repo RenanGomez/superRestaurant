@@ -34,5 +34,7 @@ Actualizado: 2026-11-26 (Ola 4 — deuda que muerde: verificadores, lecturas de 
   #132/#133).
 - **Puerta humana pendiente:** la prueba única del operador (D1–D7, T1–T4, seis pestañas de inventario)
   sigue sin registrarse; ninguna fila de «Día operable» pasa a DONE.
-- **Siguiente ola:** `o0-purge-wire` (P1) y `o0-leader-wire` (P2) para poder declarar M2 al 100 %;
-  después el arranque de M4 (`m4-metrics-catalog`, `m4-adr-014-exports`).
+- **Siguiente ola:** `docs/plans/plan-2026-11-27-ola5-m2-m4.md` y prompt en
+  `docs/agentic/prompt-siguiente-sesion-2026-11-28.md`. Arranca con `o0-purge-wire` (P1) y
+  `o0-device-registry`, sigue con `o0-leader-wire` para poder declarar M2 al 100 %, y después M4
+  (`m4-metrics-catalog`, `m4-adr-014-exports`).
