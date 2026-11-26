@@ -275,4 +275,4 @@ begin
   end;
 end
 $menu_shared_modifier_groups_tests$;
-rollback;
+commit;

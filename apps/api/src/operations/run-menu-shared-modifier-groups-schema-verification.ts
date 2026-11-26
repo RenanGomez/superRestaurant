@@ -128,9 +128,11 @@ try {
   const tests = join(root, "supabase", "tests");
   const invariantsSql = readFileSync(join(tests, "menu_shared_modifier_groups_invariants.sql"), "utf8");
   // Regression: the half-and-half suites insert groups with the legacy owner and must keep passing.
+  // Pinned pre-20261102000100 copies: the live fixtures assert `lockedIngredientOptionIds`, a column
+  // added after this candidate, so they cannot run against this migration set.
   const regressionSql = [
-    "catalog_halves_invariants.sql",
-    "catalog_halves_product_level_invariants.sql",
+    "catalog_halves_invariants_pre_20261102000100.sql",
+    "catalog_halves_product_level_invariants_pre_20261102000100.sql",
   ].map((name) => readFileSync(join(tests, name), "utf8"));
 
   stage = "migrated";

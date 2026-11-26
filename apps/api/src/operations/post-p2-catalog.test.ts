@@ -173,7 +173,7 @@ test("capture fixture assertions run inside the rollback migration, never the re
   assert.match(captureRunner, /20260916000600_create_customer_directory_command\.sql/u);
   assert.match(captureRunner, /20260916000700_create_customer_directory_search\.sql/u);
   assert.match(captureRunner, /20260916000800_create_customer_directory_detail\.sql/u);
-  assert.match(captureRunner, /customer_directory_invariants\.sql/u);
+  assert.match(captureRunner, /customer_directory_invariants_pre_20260917000100\.sql/u);
 });
 
 test("incomplete customer addresses are rejected without disguising request errors as concurrency conflicts", () => {

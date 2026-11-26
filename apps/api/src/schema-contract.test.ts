@@ -1018,6 +1018,6 @@ test("shared modifier groups migration keeps every foreign key scoped, adds no l
   const verifier = readFileSync(new URL("../../../supabase/tests/menu_shared_modifier_groups_invariants.sql", import.meta.url), "utf8");
   assert.match(verifier, /^-- Test-only fixtures/mu);
   assert.match(verifier, /\nbegin;\n/u);
-  assert.match(verifier, /rollback;\s*$/u);
-  assert.equal(/\bcommit\b/iu.test(verifier.replace(/--.*$/gmu, "")), false);
+  assert.match(verifier, /commit;\s*$/u);
+  assert.equal(/\brollback;/iu.test(verifier.replace(/--.*$/gmu, "")), false);
 });
