@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { Field } from "../../../components/field-hint";
+import { Field, FieldHint } from "../../../components/field-hint";
 import {
   INVENTORY_TABS,
   INVENTORY_TAB_LABELS,
@@ -22,6 +22,7 @@ import {
   inventoryUnitLabel,
   parseInventoryTab,
   parseInventoryWholeNumber,
+  warehouseDefaultLabel,
   type InventoryTab,
 } from "../../../lib/inventory-ui";
 import { uiButton } from "../../../lib/ui-classes";
@@ -203,19 +204,10 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
     setNotice("Insumo guardado.");
   }
 
-  function warehouseSaved(saved: InventoryWarehouseV1): void {
-    setWarehouses((current) => {
-      if (current.status !== "ready") return { status: "ready", value: [saved] };
-      const exists = current.value.some((warehouse) => warehouse.id === saved.id);
-      return {
-        status: "ready",
-        value: exists
-          ? current.value.map((warehouse) => warehouse.id === saved.id ? saved : warehouse)
-          : [...current.value, saved],
-      };
-    });
+  function warehouseSaved(): void {
     setDialog(undefined);
     setNotice("Almacén guardado.");
+    void loadWarehouses();
   }
 
   const filteredItems = items.status === "ready" ? filterInventoryItems(items.value, query) : [];
@@ -443,11 +435,19 @@ function WarehouseRow({ warehouse, canManage, onEdit }: {
   readonly canManage: boolean;
   readonly onEdit: () => void;
 }): ReactNode {
+  const defaultLabel = warehouseDefaultLabel(warehouse.isDefault);
   const content = (
     <>
       <span className="flex flex-wrap items-center justify-between gap-2">
         <strong className="break-words text-base">{warehouse.name}</strong>
-        <StatusBadge active={warehouse.active} />
+        <span className="flex flex-wrap items-center gap-2">
+          {defaultLabel !== null && (
+            <span className="inline-flex min-h-6 items-center rounded-full border border-accent px-2 text-xs font-semibold text-accent">
+              {defaultLabel}
+            </span>
+          )}
+          <StatusBadge active={warehouse.active} />
+        </span>
       </span>
       {canManage && <span className="mt-2 text-xs font-semibold text-accent">Editar almacén</span>}
     </>
@@ -597,6 +597,7 @@ function WarehouseDialog({ action, warehouse, onClose, onSaved }: {
 }): ReactNode {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const defaultId = useId();
   const editing = warehouse !== undefined;
   const close = (): void => { if (!saving) onClose(); };
 
@@ -606,12 +607,17 @@ function WarehouseDialog({ action, warehouse, onClose, onSaved }: {
     const data = new FormData(event.currentTarget);
     const name = String(data.get("name") ?? "").trim();
     const active = data.get("active") === "on";
+    const isDefault = data.get("isDefault") === "on";
     if (name.length === 0) { setError("Escribe el nombre del almacén."); return; }
     if (name.length > 160) { setError("El nombre no puede pasar de 160 caracteres."); return; }
+    if (isDefault && !active) {
+      setError("Un almacén inactivo no puede ser el predeterminado para consumo por venta.");
+      return;
+    }
 
     setError(undefined);
     setSaving(true);
-    const payload = editing ? { active, id: warehouse.id, name } : { active, name };
+    const payload = editing ? { active, id: warehouse.id, isDefault, name } : { active, isDefault, name };
     void (async () => {
       try {
         const reply = editing ? await action("updateWarehouse", payload) : await action("createWarehouse", payload);
@@ -639,6 +645,17 @@ function WarehouseDialog({ action, warehouse, onClose, onSaved }: {
           <input type="checkbox" name="active" className={checkboxClass} defaultChecked={warehouse?.active ?? true} disabled={saving} />
           <span>Almacén activo</span>
         </label>
+        <div className="flex min-h-11 items-center gap-2 text-sm">
+          <input id={defaultId} type="checkbox" name="isDefault" className={checkboxClass}
+            defaultChecked={warehouse?.isDefault ?? false} disabled={saving} />
+          <label htmlFor={defaultId} className="flex min-h-11 flex-1 items-center">
+            Almacén predeterminado para consumo por venta
+          </label>
+          <FieldHint
+            label="Almacén predeterminado para consumo por venta"
+            text="Solo puede haber uno por sucursal. Al marcarlo, el almacén anterior deja de serlo y el consumo por venta descuenta de este."
+          />
+        </div>
         {error !== undefined && <p role="alert" className="rounded-lg bg-error-bg p-3 text-sm">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">
           <button type="button" className={uiButton()} onClick={close} disabled={saving}>Cancelar</button>

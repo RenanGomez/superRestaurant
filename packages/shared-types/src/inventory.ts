@@ -35,6 +35,8 @@ export interface InventoryWarehouseV1 {
   readonly branchId: BranchId;
   readonly name: string;
   readonly active: boolean;
+  /** True for the single active warehouse a branch uses for sale-driven consumption. */
+  readonly isDefault: boolean;
 }
 
 export interface InventoryMovementV1 {
@@ -349,7 +351,7 @@ export function parseInventoryItemV1(value: unknown): InventoryItemV1 | undefine
 }
 
 export function parseInventoryWarehouseV1(value: unknown): InventoryWarehouseV1 | undefined {
-  const record = exactRecord(value, ["id", "restaurantId", "branchId", "name", "active"]);
+  const record = exactRecord(value, ["id", "restaurantId", "branchId", "name", "active", "isDefault"]);
   if (record === undefined) return undefined;
 
   const id = ownValue(record, "id");
@@ -357,6 +359,7 @@ export function parseInventoryWarehouseV1(value: unknown): InventoryWarehouseV1 
   const branchId = ownValue(record, "branchId");
   const name = ownValue(record, "name");
   const active = ownValue(record, "active");
+  const isDefault = ownValue(record, "isDefault");
 
   if (
     !isInventoryId(id)
@@ -364,6 +367,7 @@ export function parseInventoryWarehouseV1(value: unknown): InventoryWarehouseV1 
     || !isInventoryId(branchId)
     || !isBoundedText(name, 160)
     || typeof active !== "boolean"
+    || typeof isDefault !== "boolean"
   ) {
     return undefined;
   }
@@ -374,6 +378,7 @@ export function parseInventoryWarehouseV1(value: unknown): InventoryWarehouseV1 
     branchId: branchId as BranchId,
     name,
     active,
+    isDefault,
   });
 }
 

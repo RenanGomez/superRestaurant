@@ -29,11 +29,11 @@ const readWarehouseForManageSql = "select * from app_private.read_inventory_ware
 const insertItemSql =
   "select * from app_private.create_inventory_item($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::integer,$8::boolean)";
 const insertWarehouseSql =
-  "select * from app_private.create_inventory_warehouse($1::uuid,$2::uuid,$3::uuid,$4::text,$5::boolean)";
+  "select * from app_private.create_inventory_warehouse($1::uuid,$2::uuid,$3::uuid,$4::text,$5::boolean,$6::boolean)";
 const updateItemSql =
   "select * from app_private.update_inventory_item($1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::integer,$7::integer,$8::boolean)";
 const updateWarehouseSql =
-  "select * from app_private.update_inventory_warehouse($1::uuid,$2::uuid,$3::text,$4::boolean)";
+  "select * from app_private.update_inventory_warehouse($1::uuid,$2::uuid,$3::text,$4::boolean,$5::boolean)";
 
 const ITEM_CREATE_KEYS = Object.freeze([
   "restaurantId",
@@ -51,8 +51,8 @@ const ITEM_PATCH_KEYS = Object.freeze([
   "active",
   "purchaseUnitFactor",
 ] as const);
-const WAREHOUSE_CREATE_KEYS = Object.freeze(["restaurantId", "branchId", "name", "active"] as const);
-const WAREHOUSE_PATCH_KEYS = Object.freeze(["name", "active"] as const);
+const WAREHOUSE_CREATE_KEYS = Object.freeze(["restaurantId", "branchId", "name", "active", "isDefault"] as const);
+const WAREHOUSE_PATCH_KEYS = Object.freeze(["name", "active", "isDefault"] as const);
 
 export type InventoryApplicationErrorCode = "request" | "authorization" | "conflict" | "missing" | "unavailable";
 
@@ -91,6 +91,7 @@ export interface CreateInventoryWarehouseCommand {
   readonly branchId: string;
   readonly name: string;
   readonly active: boolean;
+  readonly isDefault: boolean;
 }
 
 @Injectable()
@@ -172,6 +173,7 @@ export class ItemsService {
       command.branchId,
       command.name,
       command.active,
+      command.isDefault,
     ]));
     if (rows.length !== 1) throw unavailable();
     const warehouse = toWarehouse(rows[0]);
@@ -228,6 +230,7 @@ export class ItemsService {
       warehouseId,
       merged.name,
       merged.active,
+      merged.isDefault,
     ]));
     if (rows.length !== 1) throw unavailable();
     const updated = toWarehouse(rows[0]);
@@ -295,7 +298,7 @@ export class ItemsService {
       if (error instanceof InventoryApplicationError) throw error;
       const state = sqlState(error);
       if (state === "23505" || state === "23503") throw new InventoryApplicationError("conflict");
-      if (state === "23514") throw new InventoryApplicationError("request");
+      if (state === "22000" || state === "23514") throw new InventoryApplicationError("request");
       if (state === "42501") throw new InventoryApplicationError("authorization");
       throw unavailable();
     }
@@ -369,6 +372,7 @@ function parseCreateWarehouse(input: unknown): CreateInventoryWarehouseCommand |
     branchId,
     name: ownValue(record, "name"),
     active: Object.hasOwn(record, "active") ? ownValue(record, "active") : true,
+    isDefault: Object.hasOwn(record, "isDefault") ? ownValue(record, "isDefault") : false,
   };
   const parsed = parseInventoryWarehouseV1(candidate);
   if (parsed === undefined) return undefined;
@@ -377,6 +381,7 @@ function parseCreateWarehouse(input: unknown): CreateInventoryWarehouseCommand |
     branchId: parsed.branchId,
     name: parsed.name,
     active: parsed.active,
+    isDefault: parsed.isDefault,
   });
 }
 
@@ -416,6 +421,7 @@ function mergeWarehouse(
     branchId: existing.branchId,
     name: Object.hasOwn(patch, "name") ? patch["name"] : existing.name,
     active: Object.hasOwn(patch, "active") ? patch["active"] : existing.active,
+    isDefault: Object.hasOwn(patch, "isDefault") ? patch["isDefault"] : existing.isDefault,
   });
 }
 
@@ -443,6 +449,7 @@ function toWarehouse(row: unknown): InventoryWarehouseV1 | undefined {
     branchId: ownValue(record, "branch_id"),
     name: ownValue(record, "name"),
     active: ownValue(record, "active"),
+    isDefault: ownValue(record, "is_default"),
   });
 }
 

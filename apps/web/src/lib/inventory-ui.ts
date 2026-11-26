@@ -53,6 +53,11 @@ export function inventoryUnitLabel(unit: string): string {
   }
 }
 
+/** Badge text for the branch default warehouse, or null when the warehouse is not the default. */
+export function warehouseDefaultLabel(isDefault: boolean): string | null {
+  return isDefault ? "Predeterminado" : null;
+}
+
 const NUMBER_FORMAT = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 });
 
 /** Formats a whole quantity for display (thousands separated with es-MX rules). */
