@@ -9,6 +9,7 @@ import {
   formatInventoryMovementQuantity,
   formatInventoryNumber,
   formatInventoryTimestamp,
+  formatMinorUnits,
   formatRecipeVersionLabel,
   inventoryMovementKindLabel,
   inventoryTabHref,
@@ -17,13 +18,16 @@ import {
   matchesInventoryQuery,
   parseInventoryTab,
   parseInventoryWholeNumber,
+  purchaseOrderStatusLabel,
   recipeVersionStateLabel,
   validateInventoryMovementDraft,
+  validatePurchaseOrderDraft,
   validateRecipeLineDrafts,
+  validateSupplierDraft,
 } from "./inventory-ui.js";
 
 test("inventory tabs are stable and parse untrusted values", () => {
-  assert.deepEqual(INVENTORY_TABS, ["insumos", "recetas", "almacenes", "movimientos"]);
+  assert.deepEqual(INVENTORY_TABS, ["insumos", "recetas", "almacenes", "movimientos", "compras"]);
   assert.equal(DEFAULT_INVENTORY_TAB, "insumos");
   assert.equal(isInventoryTab("insumos"), true);
   assert.equal(isInventoryTab("recetas"), true);
@@ -31,6 +35,8 @@ test("inventory tabs are stable and parse untrusted values", () => {
   assert.equal(parseInventoryTab("  Almacenes  "), "almacenes");
   assert.equal(parseInventoryTab("movimientos"), "movimientos");
   assert.equal(parseInventoryTab("recetas"), "recetas");
+  assert.equal(parseInventoryTab("compras"), "compras");
+  assert.equal(isInventoryTab("compras"), true);
   assert.equal(parseInventoryTab("otra"), undefined);
   assert.equal(parseInventoryTab(undefined), undefined);
 });
@@ -212,4 +218,79 @@ test("recipe drafts require at least one complete line", () => {
   assert.equal(validateRecipeLineDrafts([{ ...base, quantity: "2.5" }]).ok, false);
   assert.equal(validateRecipeLineDrafts([{ ...base, quantity: "-3" }]).ok, false);
   assert.equal(validateRecipeLineDrafts([base, { ...base, quantity: "10" }]).ok, false);
+});
+
+test("purchase money formats from the exact minor total, never a local sum", () => {
+  assert.equal(formatMinorUnits(12_550, "MXN"), "$125.50");
+  assert.equal(formatMinorUnits(0, "MXN"), "$0.00");
+  assert.match(formatMinorUnits(100, "JPY"), /100$/u);
+  assert.doesNotMatch(formatMinorUnits(100, "JPY"), /\./u);
+  assert.match(formatMinorUnits(100, "GBP"), /1\.00$/u);
+  assert.equal(formatMinorUnits(123_456_789, "MXN"), formatMinorUnits(123_456_789, "MXN"));
+  assert.doesNotMatch(formatMinorUnits(123_456_789, "MXN"), /e/iu);
+  assert.equal(formatMinorUnits(100, "ZZZ"), "Moneda no admitida");
+});
+
+test("supplier drafts accept a name and an optional contact", () => {
+  const valid = validateSupplierDraft({ contact: " 555 123 4567 ", name: "  Distribuidora Sol  " });
+  assert.equal(valid.ok, true);
+  if (!valid.ok) return;
+  assert.deepEqual(valid, { contact: "555 123 4567", name: "Distribuidora Sol", ok: true });
+
+  const withoutContact = validateSupplierDraft({ contact: "   ", name: "Sin contacto" });
+  assert.equal(withoutContact.ok, true);
+  if (withoutContact.ok) assert.equal(withoutContact.contact, null);
+
+  assert.equal(validateSupplierDraft({ contact: "", name: "   " }).ok, false);
+  assert.equal(validateSupplierDraft({ contact: "", name: "x".repeat(161) }).ok, false);
+  assert.equal(validateSupplierDraft({ contact: "x".repeat(201), name: "Proveedor" }).ok, false);
+});
+
+test("purchase order drafts require supplier, ISO currency and valid unique lines", () => {
+  const base = {
+    currency: "mxn",
+    lines: [{ itemId: "item-a", quantity: "2", unitCode: "g" as const, unitCostMinor: "1250" }],
+    supplierId: "supplier",
+  };
+  const valid = validatePurchaseOrderDraft(base);
+  assert.equal(valid.ok, true);
+  if (!valid.ok) return;
+  assert.equal(valid.currency, "MXN");
+  assert.deepEqual(valid.lines, [{ itemId: "item-a", quantity: 2, unitCode: "g", unitCostMinor: 1250 }]);
+
+  assert.equal(validatePurchaseOrderDraft({ ...base, supplierId: " " }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({ ...base, currency: "MX" }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({ ...base, currency: "MXN1" }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({ ...base, lines: [] }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({
+    ...base,
+    lines: [{ itemId: "", quantity: "1", unitCode: "g", unitCostMinor: "0" }],
+  }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({
+    ...base,
+    lines: [{ itemId: "item-a", quantity: "0", unitCode: "g", unitCostMinor: "0" }],
+  }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({
+    ...base,
+    lines: [{ itemId: "item-a", quantity: "2.5", unitCode: "g", unitCostMinor: "0" }],
+  }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({
+    ...base,
+    lines: [{ itemId: "item-a", quantity: "1", unitCode: "g", unitCostMinor: "-1" }],
+  }).ok, false);
+  assert.equal(validatePurchaseOrderDraft({
+    ...base,
+    lines: [
+      { itemId: "item-a", quantity: "1", unitCode: "g", unitCostMinor: "0" },
+      { itemId: "item-a", quantity: "3", unitCode: "g", unitCostMinor: "100" },
+    ],
+  }).ok, false);
+});
+
+test("purchase order statuses carry an operator-facing Spanish label", () => {
+  assert.equal(purchaseOrderStatusLabel("draft"), "Borrador");
+  assert.equal(purchaseOrderStatusLabel("sent"), "Enviada");
+  assert.equal(purchaseOrderStatusLabel("received"), "Recibida");
+  assert.equal(purchaseOrderStatusLabel("cancelled"), "Cancelada");
+  assert.equal(purchaseOrderStatusLabel("unknown"), "Orden");
 });

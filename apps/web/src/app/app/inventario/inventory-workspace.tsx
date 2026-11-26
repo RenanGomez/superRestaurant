@@ -27,6 +27,7 @@ import {
 import { uiButton } from "../../../lib/ui-classes";
 import { InventoryModal } from "./inventory-modal";
 import { MovementsPanel } from "./movements-panel";
+import { PurchasingPanel } from "./purchasing-panel";
 import { RecipesPanel } from "./recipes-panel";
 import type { InventoryActionResult, InventoryError, InventoryOperation } from "./actions";
 
@@ -82,18 +83,22 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
   const recetasTabId = useId();
   const almacenesTabId = useId();
   const movimientosTabId = useId();
+  const comprasTabId = useId();
   const insumosPanelId = useId();
   const recetasPanelId = useId();
   const almacenesPanelId = useId();
   const movimientosPanelId = useId();
+  const comprasPanelId = useId();
   const tabButtonIds: Readonly<Record<InventoryTab, string>> = {
     almacenes: almacenesTabId,
+    compras: comprasTabId,
     insumos: insumosTabId,
     movimientos: movimientosTabId,
     recetas: recetasTabId,
   };
   const tabPanelIds: Readonly<Record<InventoryTab, string>> = {
     almacenes: almacenesPanelId,
+    compras: comprasPanelId,
     insumos: insumosPanelId,
     movimientos: movimientosPanelId,
     recetas: recetasPanelId,
@@ -142,12 +147,13 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
   }, [initialTab]);
 
   useEffect(() => {
-    if ((activeTab === "insumos" || activeTab === "movimientos" || activeTab === "recetas")
-      && items.status === "idle") void loadItems();
+    if ((activeTab === "insumos" || activeTab === "movimientos" || activeTab === "recetas"
+      || activeTab === "compras") && items.status === "idle") void loadItems();
   }, [activeTab, items.status]);
 
   useEffect(() => {
-    if ((activeTab === "almacenes" || activeTab === "movimientos") && warehouses.status === "idle") {
+    if ((activeTab === "almacenes" || activeTab === "movimientos" || activeTab === "compras")
+      && warehouses.status === "idle") {
       void loadWarehouses();
     }
   }, [activeTab, warehouses.status]);
@@ -346,6 +352,20 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
             items={items.status === "ready" ? items.value : []}
             warehouses={warehouses.status === "ready" ? warehouses.value : []}
             itemsStatus={items.status}
+            warehousesStatus={warehouses.status}
+            onRetryCatalog={() => { void loadItems(); void loadWarehouses(); }}
+          />
+        </section>
+      )}
+
+      {activeTab === "compras" && (
+        <section role="tabpanel" id={comprasPanelId} aria-labelledby={comprasTabId} tabIndex={0} className={panelClass}>
+          <PurchasingPanel
+            action={action}
+            canManage={canManage}
+            items={items.status === "ready" ? items.value : []}
+            itemsStatus={items.status}
+            warehouses={warehouses.status === "ready" ? warehouses.value : []}
             warehousesStatus={warehouses.status}
             onRetryCatalog={() => { void loadItems(); void loadWarehouses(); }}
           />

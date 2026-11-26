@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers";
 import {
+  PURCHASE_ORDER_STATUSES,
   parseInventoryBalanceV1,
   parseInventoryItemV1,
   parseInventoryMovementV1,
@@ -15,6 +16,7 @@ import {
   type InventoryMovementV1,
   type InventoryUnitV1,
   type InventoryWarehouseV1,
+  type PurchaseOrderStatusV1,
   type RecipeVersionV1,
 } from "@super-restaurant/shared-types";
 
@@ -33,16 +35,23 @@ export type InventoryError = "conflict" | "denied" | "invalid" | "missing" | "ti
 export type InventoryOperation =
   | "createItem"
   | "createMovement"
+  | "createPurchaseOrder"
+  | "createSupplier"
   | "createWarehouse"
   | "listBalances"
   | "listItems"
   | "listMovements"
   | "listProducts"
+  | "listPurchaseOrders"
   | "listRecipes"
+  | "listSuppliers"
   | "listWarehouses"
   | "publishRecipe"
+  | "readPurchaseOrder"
   | "readRecipe"
+  | "receivePurchaseOrder"
   | "updateItem"
+  | "updateSupplier"
   | "updateWarehouse";
 
 export interface RecipeProductV1 {
@@ -62,6 +71,52 @@ export interface RecipeSummaryV1 {
   readonly createdAt: string;
 }
 
+export interface SupplierV1 {
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly name: string;
+  readonly contact: string | null;
+  readonly active: boolean;
+  readonly createdAt: string;
+}
+
+export interface PurchaseOrderSummaryV1 {
+  readonly id: string;
+  readonly supplierId: string;
+  readonly supplierName: string;
+  readonly status: PurchaseOrderStatusV1;
+  readonly currency: string;
+  readonly orderedAt: string;
+  readonly receivedAt: string | null;
+  readonly receivedBy: string | null;
+  readonly totalMinor: number;
+}
+
+export interface PurchaseOrderLineDetailV1 {
+  readonly itemId: string;
+  readonly itemName: string;
+  readonly quantity: number;
+  readonly unitCode: InventoryUnitV1;
+  readonly unitCostMinor: number;
+}
+
+export interface PurchaseOrderDetailV1 extends PurchaseOrderSummaryV1 {
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly lines: readonly PurchaseOrderLineDetailV1[];
+}
+
+export interface PurchaseOrderCreatedV1 {
+  readonly orderId: string;
+  readonly status: PurchaseOrderStatusV1;
+  readonly replayed: boolean;
+}
+
+export interface PurchaseOrderReceiptMovementV1 {
+  readonly lineId: string;
+  readonly movementId: string;
+}
+
 export type InventoryActionResult =
   | { readonly ok: true; readonly items: readonly InventoryItemV1[] }
   | { readonly ok: true; readonly warehouses: readonly InventoryWarehouseV1[] }
@@ -70,6 +125,12 @@ export type InventoryActionResult =
   | { readonly ok: true; readonly products: readonly RecipeProductV1[] }
   | { readonly ok: true; readonly recipes: readonly RecipeSummaryV1[] }
   | { readonly ok: true; readonly recipe: RecipeVersionV1 }
+  | { readonly ok: true; readonly suppliers: readonly SupplierV1[] }
+  | { readonly ok: true; readonly supplier: SupplierV1 }
+  | { readonly ok: true; readonly orders: readonly PurchaseOrderSummaryV1[] }
+  | { readonly ok: true; readonly order: PurchaseOrderDetailV1 }
+  | { readonly ok: true; readonly created: PurchaseOrderCreatedV1 }
+  | { readonly ok: true; readonly receipt: readonly PurchaseOrderReceiptMovementV1[] }
   | { readonly ok: true; readonly item: InventoryItemV1 }
   | { readonly ok: true; readonly warehouse: InventoryWarehouseV1 }
   | { readonly ok: true; readonly recorded: true }
@@ -85,6 +146,40 @@ const MANUAL_MOVEMENT_KINDS: ReadonlySet<InventoryMovementKindV1> = new Set([
   "waste",
 ]);
 const MANAGE_ROLES: ReadonlySet<string> = new Set(["owner", "admin", "manager"]);
+const INVENTORY_OPERATIONS: ReadonlySet<InventoryOperation> = new Set([
+  "createItem",
+  "createMovement",
+  "createPurchaseOrder",
+  "createSupplier",
+  "createWarehouse",
+  "listBalances",
+  "listItems",
+  "listMovements",
+  "listProducts",
+  "listPurchaseOrders",
+  "listRecipes",
+  "listSuppliers",
+  "listWarehouses",
+  "publishRecipe",
+  "readPurchaseOrder",
+  "readRecipe",
+  "receivePurchaseOrder",
+  "updateItem",
+  "updateSupplier",
+  "updateWarehouse",
+]);
+const READ_OPERATIONS: ReadonlySet<InventoryOperation> = new Set([
+  "listBalances",
+  "listItems",
+  "listMovements",
+  "listProducts",
+  "listPurchaseOrders",
+  "listRecipes",
+  "listSuppliers",
+  "listWarehouses",
+  "readPurchaseOrder",
+  "readRecipe",
+]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const CONTROL_CHARACTER_PATTERN = /[\p{Cc}\p{Cf}]/u;
 
@@ -92,11 +187,7 @@ export async function inventoryAction(
   operation: InventoryOperation,
   input?: unknown,
 ): Promise<InventoryActionResult> {
-  if (operation !== "listItems" && operation !== "listWarehouses" && operation !== "listMovements"
-    && operation !== "listBalances" && operation !== "createItem" && operation !== "updateItem"
-    && operation !== "createWarehouse" && operation !== "updateWarehouse" && operation !== "createMovement"
-    && operation !== "listProducts" && operation !== "listRecipes" && operation !== "readRecipe"
-    && operation !== "publishRecipe") {
+  if (!INVENTORY_OPERATIONS.has(operation)) {
     return invalid();
   }
 
@@ -113,9 +204,7 @@ export async function inventoryAction(
     return denied();
   }
   const canManage = membership.roles.some((role) => MANAGE_ROLES.has(role));
-  if (!canManage && operation !== "listItems" && operation !== "listWarehouses"
-    && operation !== "listMovements" && operation !== "listBalances"
-    && operation !== "listProducts" && operation !== "listRecipes" && operation !== "readRecipe") {
+  if (!canManage && !READ_OPERATIONS.has(operation)) {
     return denied();
   }
 
@@ -178,6 +267,107 @@ export async function inventoryAction(
     const recipe = parseRecipeVersionV1(reply.body);
     return recipe === undefined || recipe.restaurantId !== scope.restaurantId
       || recipe.productId !== command.productId ? unavailable() : { ok: true, published: true };
+  }
+
+  if (operation === "listSuppliers") {
+    const includeInactive = readIncludeInactive(input);
+    if (includeInactive === undefined) return invalid();
+    const query = new URLSearchParams({ restaurantId: scope.restaurantId });
+    if (includeInactive) query.set("includeInactive", "true");
+    const reply = await send(session.access_token, `${base}/suppliers?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const suppliers = parseSuppliersList(reply.body, scope.restaurantId, includeInactive);
+    return suppliers === undefined ? unavailable() : { ok: true, suppliers };
+  }
+
+  if (operation === "createSupplier") {
+    const command = readCreateSupplier(input);
+    if (command === undefined) return invalid();
+    const reply = await send(session.access_token, `${base}/suppliers`, "POST", {
+      active: command.active,
+      contact: command.contact,
+      name: command.name,
+      restaurantId: scope.restaurantId,
+    });
+    if (!reply.ok) return reply;
+    const supplier = parseSupplierV1(reply.body, scope.restaurantId);
+    return supplier === undefined ? unavailable() : { ok: true, supplier };
+  }
+
+  if (operation === "updateSupplier") {
+    const command = readSupplierPatch(input);
+    if (command === undefined) return invalid();
+    const reply = await send(
+      session.access_token,
+      `${base}/suppliers/${encodeURIComponent(command.id)}`,
+      "PATCH",
+      command.patch,
+    );
+    if (!reply.ok) return reply;
+    const supplier = parseSupplierV1(reply.body, scope.restaurantId);
+    return supplier === undefined || supplier.id !== command.id ? unavailable() : { ok: true, supplier };
+  }
+
+  if (operation === "listPurchaseOrders") {
+    const filter = readPurchaseOrderFilter(input);
+    if (filter === undefined) return invalid();
+    const query = new URLSearchParams({
+      branchId: scope.branchId,
+      limit: "100",
+      restaurantId: scope.restaurantId,
+    });
+    if (filter.status !== undefined) query.set("status", filter.status);
+    const reply = await send(session.access_token, `${base}/purchase-orders?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const orders = parseOrdersList(reply.body, scope.restaurantId, scope.branchId);
+    return orders === undefined ? unavailable() : { ok: true, orders };
+  }
+
+  if (operation === "createPurchaseOrder") {
+    const command = readCreatePurchaseOrder(input);
+    if (command === undefined) return invalid();
+    const payload: Record<string, unknown> = {
+      branchId: scope.branchId,
+      currency: command.currency,
+      idempotencyKey: command.idempotencyKey,
+      lines: command.lines,
+      restaurantId: scope.restaurantId,
+      supplierId: command.supplierId,
+    };
+    if (command.orderedAt !== undefined) payload["orderedAt"] = command.orderedAt;
+    const reply = await send(session.access_token, `${base}/purchase-orders`, "POST", payload);
+    if (!reply.ok) return reply;
+    const created = parseCreatedOrder(reply.body);
+    return created === undefined ? unavailable() : { ok: true, created };
+  }
+
+  if (operation === "readPurchaseOrder") {
+    const id = readUuidField(input, "id");
+    if (id === undefined) return invalid();
+    const reply = await send(
+      session.access_token,
+      `${base}/purchase-orders/${encodeURIComponent(id)}`,
+      "GET",
+    );
+    if (!reply.ok) return reply;
+    const order = parseOrderDetail(reply.body, scope.restaurantId, scope.branchId);
+    return order === undefined || order.id !== id ? unavailable() : { ok: true, order };
+  }
+
+  if (operation === "receivePurchaseOrder") {
+    const command = readReceiveCommand(input);
+    if (command === undefined) return invalid();
+    const payload: Record<string, unknown> = { warehouseId: command.warehouseId };
+    if (command.deviceId !== undefined) payload["deviceId"] = command.deviceId;
+    const reply = await send(
+      session.access_token,
+      `${base}/purchase-orders/${encodeURIComponent(command.id)}/receive`,
+      "POST",
+      payload,
+    );
+    if (!reply.ok) return reply;
+    const receipt = parseReceipt(reply.body);
+    return receipt === undefined ? unavailable() : { ok: true, receipt };
   }
 
   if (operation === "listItems") {
@@ -539,6 +729,315 @@ function readPublishRecipeCommand(input: unknown, restaurantId: string) {
     productId: own(record, "productId"),
     restaurantId,
   });
+}
+
+const ORDER_STATUSES: ReadonlySet<string> = new Set(PURCHASE_ORDER_STATUSES);
+const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
+
+interface SupplierCommand {
+  readonly name: string;
+  readonly contact: string | null;
+  readonly active: boolean;
+}
+
+function readCreateSupplier(input: unknown): SupplierCommand | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const name = readText(own(record, "name"), 160);
+  const contact = readOptionalText(own(record, "contact"), 200);
+  const active = readBoolean(own(record, "active"), true);
+  if (name === undefined || contact === undefined || active === undefined) return undefined;
+  return { active, contact, name };
+}
+
+function readSupplierPatch(
+  input: unknown,
+): { readonly id: string; readonly patch: Readonly<Record<string, unknown>> } | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const id = own(record, "id");
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) return undefined;
+  const patch: Record<string, unknown> = {};
+  if (Object.hasOwn(record, "name")) {
+    const name = readText(own(record, "name"), 160);
+    if (name === undefined) return undefined;
+    patch["name"] = name;
+  }
+  if (Object.hasOwn(record, "contact")) {
+    const contact = readOptionalText(own(record, "contact"), 200);
+    if (contact === undefined) return undefined;
+    patch["contact"] = contact;
+  }
+  if (Object.hasOwn(record, "active")) {
+    const active = readBoolean(own(record, "active"));
+    if (active === undefined) return undefined;
+    patch["active"] = active;
+  }
+  return Object.keys(patch).length === 0 ? undefined : { id, patch: Object.freeze(patch) };
+}
+
+function readIncludeInactive(input: unknown): boolean | undefined {
+  if (input === undefined) return false;
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  return readBoolean(own(record, "includeInactive"), false);
+}
+
+function readPurchaseOrderFilter(
+  input: unknown,
+): { readonly status?: PurchaseOrderStatusV1 } | undefined {
+  if (input === undefined) return {};
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const raw = own(record, "status");
+  if (raw === undefined || raw === null || raw === "") return {};
+  if (typeof raw !== "string" || !ORDER_STATUSES.has(raw)) return undefined;
+  return { status: raw as PurchaseOrderStatusV1 };
+}
+
+interface CreatePurchaseOrderCommand {
+  readonly supplierId: string;
+  readonly currency: string;
+  readonly idempotencyKey: string;
+  readonly orderedAt?: string;
+  readonly lines: readonly {
+    readonly itemId: string;
+    readonly quantity: number;
+    readonly unitCode: InventoryUnitV1;
+    readonly unitCostMinor: number;
+  }[];
+}
+
+function readCreatePurchaseOrder(input: unknown): CreatePurchaseOrderCommand | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const supplierId = own(record, "supplierId");
+  const currency = own(record, "currency");
+  const idempotencyKey = own(record, "idempotencyKey");
+  if (typeof supplierId !== "string" || !UUID_PATTERN.test(supplierId)) return undefined;
+  if (typeof currency !== "string" || !CURRENCY_PATTERN.test(currency.trim().toUpperCase())) return undefined;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1 || idempotencyKey.length > 200
+    || CONTROL_CHARACTER_PATTERN.test(idempotencyKey)) {
+    return undefined;
+  }
+  let orderedAt: string | undefined;
+  if (Object.hasOwn(record, "orderedAt")) {
+    const raw = own(record, "orderedAt");
+    if (typeof raw !== "string" || raw === "" || Number.isNaN(Date.parse(raw))) return undefined;
+    orderedAt = raw;
+  }
+  const rawLines = own(record, "lines");
+  if (!Array.isArray(rawLines) || rawLines.length < 1 || rawLines.length > 200) return undefined;
+  const lines: CreatePurchaseOrderCommand["lines"][number][] = [];
+  const seen = new Set<string>();
+  for (const rawLine of rawLines) {
+    const line = readPurchaseOrderLine(rawLine);
+    if (line === undefined || seen.has(line.itemId)) return undefined;
+    seen.add(line.itemId);
+    lines.push(line);
+  }
+  return {
+    currency: currency.trim().toUpperCase(),
+    idempotencyKey,
+    lines: Object.freeze(lines),
+    supplierId,
+    ...(orderedAt === undefined ? {} : { orderedAt }),
+  };
+}
+
+function readPurchaseOrderLine(
+  input: unknown,
+): { readonly itemId: string; readonly quantity: number; readonly unitCode: InventoryUnitV1; readonly unitCostMinor: number } | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const itemId = own(record, "itemId");
+  const quantity = own(record, "quantity");
+  const unitCode = own(record, "unitCode");
+  const unitCostMinor = own(record, "unitCostMinor");
+  if (typeof itemId !== "string" || !UUID_PATTERN.test(itemId)) return undefined;
+  if (typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity < 1) return undefined;
+  if (!isInventoryUnit(unitCode)) return undefined;
+  if (typeof unitCostMinor !== "number" || !Number.isSafeInteger(unitCostMinor) || unitCostMinor < 0) {
+    return undefined;
+  }
+  return Object.freeze({ itemId, quantity, unitCode, unitCostMinor });
+}
+
+interface ReceivePurchaseOrderCommand {
+  readonly id: string;
+  readonly warehouseId: string;
+  readonly deviceId?: string;
+}
+
+function readReceiveCommand(input: unknown): ReceivePurchaseOrderCommand | undefined {
+  const record = plainRecord(input);
+  if (record === undefined) return undefined;
+  const id = own(record, "id");
+  const warehouseId = own(record, "warehouseId");
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) return undefined;
+  if (typeof warehouseId !== "string" || !UUID_PATTERN.test(warehouseId)) return undefined;
+  let deviceId: string | undefined;
+  if (Object.hasOwn(record, "deviceId")) {
+    const raw = own(record, "deviceId");
+    if (typeof raw !== "string" || !UUID_PATTERN.test(raw)) return undefined;
+    deviceId = raw;
+  }
+  return { id, warehouseId, ...(deviceId === undefined ? {} : { deviceId }) };
+}
+
+function parseSupplierV1(value: unknown, restaurantId: string): SupplierV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined) return undefined;
+  const id = own(record, "id");
+  const name = own(record, "name");
+  const contact = own(record, "contact");
+  const active = own(record, "active");
+  const createdAt = own(record, "createdAt");
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) return undefined;
+  if (own(record, "restaurantId") !== restaurantId) return undefined;
+  if (typeof name !== "string" || name.trim().length < 1) return undefined;
+  if (!(contact === null || typeof contact === "string")) return undefined;
+  if (typeof active !== "boolean") return undefined;
+  if (typeof createdAt !== "string" || createdAt.length === 0) return undefined;
+  return Object.freeze({ active, contact, createdAt, id, name, restaurantId });
+}
+
+function parseSuppliersList(
+  value: unknown,
+  restaurantId: string,
+  includeInactive: boolean,
+): readonly SupplierV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "includeInactive") !== includeInactive) {
+    return undefined;
+  }
+  const rawSuppliers = own(record, "suppliers");
+  if (!Array.isArray(rawSuppliers)) return undefined;
+  const suppliers: SupplierV1[] = [];
+  for (const rawSupplier of rawSuppliers) {
+    const supplier = parseSupplierV1(rawSupplier, restaurantId);
+    if (supplier === undefined) return undefined;
+    suppliers.push(supplier);
+  }
+  return suppliers;
+}
+
+function parseOrderSummary(value: unknown): PurchaseOrderSummaryV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined) return undefined;
+  const id = own(record, "id");
+  const supplierId = own(record, "supplierId");
+  const supplierName = own(record, "supplierName");
+  const status = own(record, "status");
+  const currency = own(record, "currency");
+  const orderedAt = own(record, "orderedAt");
+  const receivedAt = own(record, "receivedAt");
+  const receivedBy = own(record, "receivedBy");
+  const totalMinor = own(record, "totalMinor");
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) return undefined;
+  if (typeof supplierId !== "string" || !UUID_PATTERN.test(supplierId)) return undefined;
+  if (typeof supplierName !== "string" || supplierName.trim().length < 1) return undefined;
+  if (typeof status !== "string" || !ORDER_STATUSES.has(status)) return undefined;
+  if (typeof currency !== "string" || !CURRENCY_PATTERN.test(currency)) return undefined;
+  if (typeof orderedAt !== "string" || orderedAt.length === 0) return undefined;
+  if (!(receivedAt === null || (typeof receivedAt === "string" && receivedAt.length > 0))) return undefined;
+  if (!(receivedBy === null || (typeof receivedBy === "string" && receivedBy.length > 0))) return undefined;
+  if (typeof totalMinor !== "number" || !Number.isSafeInteger(totalMinor) || totalMinor < 0) return undefined;
+  return Object.freeze({
+    currency,
+    id,
+    orderedAt,
+    receivedAt,
+    receivedBy,
+    status: status as PurchaseOrderStatusV1,
+    supplierId,
+    supplierName,
+    totalMinor,
+  });
+}
+
+function parseOrdersList(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+): readonly PurchaseOrderSummaryV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId) {
+    return undefined;
+  }
+  const rawOrders = own(record, "orders");
+  if (!Array.isArray(rawOrders)) return undefined;
+  const orders: PurchaseOrderSummaryV1[] = [];
+  for (const rawOrder of rawOrders) {
+    const order = parseOrderSummary(rawOrder);
+    if (order === undefined) return undefined;
+    orders.push(order);
+  }
+  return orders;
+}
+
+function parseOrderDetail(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+): PurchaseOrderDetailV1 | undefined {
+  const record = plainRecord(value);
+  const summary = parseOrderSummary(value);
+  if (record === undefined || summary === undefined) return undefined;
+  if (own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId) return undefined;
+  const rawLines = own(record, "lines");
+  if (!Array.isArray(rawLines) || rawLines.length === 0) return undefined;
+  const lines: PurchaseOrderLineDetailV1[] = [];
+  for (const rawLine of rawLines) {
+    const line = plainRecord(rawLine);
+    if (line === undefined) return undefined;
+    const itemId = own(line, "itemId");
+    const itemName = own(line, "itemName");
+    const quantity = own(line, "quantity");
+    const unitCode = own(line, "unitCode");
+    const unitCostMinor = own(line, "unitCostMinor");
+    if (typeof itemId !== "string" || !UUID_PATTERN.test(itemId)) return undefined;
+    if (typeof itemName !== "string" || itemName.trim().length < 1) return undefined;
+    if (typeof quantity !== "number" || !Number.isSafeInteger(quantity) || quantity < 1) return undefined;
+    if (!isInventoryUnit(unitCode)) return undefined;
+    if (typeof unitCostMinor !== "number" || !Number.isSafeInteger(unitCostMinor) || unitCostMinor < 0) {
+      return undefined;
+    }
+    lines.push(Object.freeze({ itemId, itemName, quantity, unitCode, unitCostMinor }));
+  }
+  return Object.freeze({ ...summary, branchId, lines: Object.freeze(lines), restaurantId });
+}
+
+function parseCreatedOrder(value: unknown): PurchaseOrderCreatedV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined) return undefined;
+  const orderId = own(record, "orderId");
+  const status = own(record, "status");
+  const replayed = own(record, "replayed");
+  if (typeof orderId !== "string" || !UUID_PATTERN.test(orderId)) return undefined;
+  if (typeof status !== "string" || !ORDER_STATUSES.has(status)) return undefined;
+  if (typeof replayed !== "boolean") return undefined;
+  return Object.freeze({ orderId, replayed, status: status as PurchaseOrderStatusV1 });
+}
+
+function parseReceipt(value: unknown): readonly PurchaseOrderReceiptMovementV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "status") !== "received") return undefined;
+  const rawMovements = own(record, "movements");
+  if (!Array.isArray(rawMovements) || rawMovements.length === 0) return undefined;
+  const movements: PurchaseOrderReceiptMovementV1[] = [];
+  for (const rawMovement of rawMovements) {
+    const movement = plainRecord(rawMovement);
+    if (movement === undefined) return undefined;
+    const lineId = own(movement, "lineId");
+    const movementId = own(movement, "movementId");
+    if (typeof lineId !== "string" || !UUID_PATTERN.test(lineId)) return undefined;
+    if (typeof movementId !== "string" || !UUID_PATTERN.test(movementId)) return undefined;
+    movements.push(Object.freeze({ lineId, movementId }));
+  }
+  return Object.freeze(movements);
 }
 
 interface MovementFilter {
