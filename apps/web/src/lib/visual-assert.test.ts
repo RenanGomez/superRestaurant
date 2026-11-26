@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ASSUMED_ROOT_FONT_SIZE_PX,
   assertVisualSnapshot,
   effectiveTargetSize,
   findViolations,
@@ -239,4 +240,52 @@ test("mergeControlInsets toma la mayor expansión por lado entre ::before y ::af
   );
   assert.deepEqual(merged, { left: -12, top: -6, right: -10, bottom: -12 });
   assert.deepEqual(mergeControlInsets(null, null), { left: 0, top: 0, right: 0, bottom: 0 });
+});
+
+test("los límites se prueban por eje: 44x43 falla por alto y 43x44 falla por ancho", () => {
+  const short = control({ width: 44, height: 43 });
+  const narrow = control({ width: 43, height: 44 });
+  assert.deepEqual(effectiveTargetSize(short), { width: 44, height: 43 });
+  const shortViolations = findViolations(snapshot({ controls: [short] }));
+  assert.deepEqual(rules(shortViolations), ["target-size"]);
+  assert.match(shortViolations[0]?.message ?? "", /44×43px/u);
+  const narrowViolations = findViolations(snapshot({ controls: [narrow] }));
+  assert.deepEqual(rules(narrowViolations), ["target-size"]);
+  assert.match(narrowViolations[0]?.message ?? "", /43×44px/u);
+});
+
+test("un inset en rem amplía igual que en px asumiendo raíz de 16", () => {
+  assert.equal(ASSUMED_ROOT_FONT_SIZE_PX, 16);
+  assert.deepEqual(
+    insetsFromPseudo(pseudo({ inset: "-0.75rem", top: "-0.75rem", right: "-0.75rem", bottom: "-0.75rem", left: "-0.75rem" })),
+    { left: -12, top: -12, right: -12, bottom: -12 },
+  );
+  const remExpanded = control({ width: 20, height: 20, insetLeft: -12, insetTop: -12, insetRight: -12, insetBottom: -12 });
+  assert.deepEqual(effectiveTargetSize(remExpanded), { width: 44, height: 44 });
+  assert.deepEqual(rules(findViolations(snapshot({ controls: [remExpanded] }))), []);
+  // An unknown unit never invents an expansion: the auditor fails closed.
+  assert.deepEqual(
+    insetsFromPseudo(pseudo({ inset: "auto", top: "auto", right: "auto", bottom: "auto", left: "auto" })),
+    { left: 0, top: 0, right: 0, bottom: 0 },
+  );
+});
+
+test("la expansión de ::after cuenta y un pseudo estático no", () => {
+  const expanded = mergeControlInsets(
+    insetsFromPseudo(pseudo({ content: "none" })),
+    insetsFromPseudo(pseudo()),
+  );
+  assert.deepEqual(expanded, { left: -12, top: -12, right: -12, bottom: -12 });
+  const viaAfter = control({
+    width: 20,
+    height: 20,
+    insetLeft: expanded.left,
+    insetTop: expanded.top,
+    insetRight: expanded.right,
+    insetBottom: expanded.bottom,
+  });
+  assert.deepEqual(rules(findViolations(snapshot({ controls: [viaAfter] }))), []);
+  assert.equal(insetsFromPseudo(pseudo({ position: "static" })), null);
+  const staticOnly = control({ width: 20, height: 20 });
+  assert.deepEqual(rules(findViolations(snapshot({ controls: [staticOnly] }))), ["target-size"]);
 });
