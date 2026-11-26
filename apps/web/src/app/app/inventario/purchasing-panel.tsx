@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { Field } from "../../../components/field-hint";
 import {
+  ensureInventoryDeviceId,
   ensureInventoryIdempotencyKey,
   formatInventoryNumber,
   formatInventoryTimestamp,
@@ -61,8 +62,6 @@ const STATUS_FILTERS = [
   { label: "Recibida", value: "received" },
   { label: "Cancelada", value: "cancelled" },
 ] as const;
-
-const DEVICE_ID_KEY = "super-restaurant.inventory.deviceId";
 
 type DialogState =
   | { readonly kind: "supplier"; readonly supplier?: SupplierV1 }
@@ -424,22 +423,13 @@ export function PurchasingPanel({
 function useDeviceId(): string {
   const [deviceId, setDeviceId] = useState("");
   useEffect(() => {
-    let stored: string | null = null;
+    let store: Storage | undefined;
     try {
-      stored = window.sessionStorage.getItem(DEVICE_ID_KEY);
+      store = window.localStorage;
     } catch {
-      stored = null;
+      store = undefined;
     }
-    let next = stored === null ? "" : stored.trim();
-    if (next === "") {
-      next = crypto.randomUUID();
-      try {
-        window.sessionStorage.setItem(DEVICE_ID_KEY, next);
-      } catch {
-        // A blocked sessionStorage still keeps the id for this mount.
-      }
-    }
-    setDeviceId(next);
+    setDeviceId(ensureInventoryDeviceId(store, () => crypto.randomUUID()));
   }, []);
   return deviceId;
 }
