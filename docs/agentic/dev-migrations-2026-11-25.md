@@ -56,9 +56,9 @@
 - **Checkout principal en uso:** otra sesión cambió de rama durante el trabajo; el apply y los documentos se hicieron desde el worktree aislado. El informe va en la rama `docs/dev-migrations-20261125`.
 - El respaldo y el staging temporal viven fuera del repositorio; los staging temporales se eliminaron tras cada segundo dry-run.
 
-## 6. Siguiente acción mínima
+## 6. Verificación posterior y siguiente acción
 
+- **API local contra el esquema nuevo:** reconstruida y arrancada en un puerto aislado con rol `app_api`; `GET /health` → `200 {"status":"ok"}`, `GET /api/v1/health` → `200 {"status":"ok"}`, `GET /ready` → `200 {"status":"ready"}`, `GET /api/v1/access/memberships` → `401`. Proceso detenido al terminar.
 - Mergear `docs/dev-migrations-20261125`.
-- Reconstruir y reiniciar `apps/api` local con el esquema aplicado y comprobar `/api/v1/health`.
 - Configurar `SYNC_CURSOR_SECRET` (≥32) en el runtime del API antes de probar pull/push de sync; su valor no se registra.
-- Verificar en navegador real `/app/inventario` cuando el corte llegue a un entorno desplegado.
+- Verificar en navegador real `/app/inventario` y `/app/sync` cuando el corte llegue a un entorno desplegado.
