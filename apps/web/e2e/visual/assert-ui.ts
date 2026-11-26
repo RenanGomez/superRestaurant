@@ -30,6 +30,13 @@ const CONTROL_SELECTOR =
 const trackers = new WeakMap<Page, VisualTracker>();
 const CAPTURE_DIR = fileURLToPath(new URL("../../../../docs/agentic/visual-m2", import.meta.url));
 
+/** Overrides the capture folder for one verification round (e.g. `docs/agentic/visual-verify-2026-11-26`). */
+export function setVisualCaptureDir(relativeToWebApp: string): void {
+  captureDir = resolve(fileURLToPath(new URL("../../..", import.meta.url)), relativeToWebApp);
+}
+
+let captureDir = CAPTURE_DIR;
+
 export function trackVisualUi(page: Page): VisualTracker {
   const existing = trackers.get(page);
   if (existing !== undefined) return existing;
@@ -146,8 +153,8 @@ export async function assertVisualUi(page: Page, label: string): Promise<void> {
     dialogCalls: [...tracker.dialogCalls],
     focusedOutline: raw.focusedOutline,
   };
-  mkdirSync(CAPTURE_DIR, { recursive: true });
-  const screenshotPath = resolve(CAPTURE_DIR, `${label}-${snapshot.viewportWidth}.png`);
+  mkdirSync(captureDir, { recursive: true });
+  const screenshotPath = resolve(captureDir, `${label}-${snapshot.viewportWidth}.png`);
   mkdirSync(dirname(screenshotPath), { recursive: true });
   await page.screenshot({ path: screenshotPath, fullPage: true });
   assertVisualSnapshot(snapshot);
