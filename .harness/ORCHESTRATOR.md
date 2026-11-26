@@ -72,6 +72,19 @@ nunca recortar validación, manejo de errores, seguridad, tests de lógica riesg
 5. **Cerrar**: actualizar notas y handoff; resumen corto al usuario.
    Antes del resumen, **cierra lo que lanzaste** (ver "Limpieza" abajo).
 
+### PRs: fallback REST si GitHub GraphQL falla
+`gh pr create` usa la mutación GraphQL `createPullRequest`. Un `GraphQL: Something went wrong while executing your
+query` con `request-id` es un fallo transitorio del servidor de GitHub, no de permisos ni de la rama.
+
+1. No reintentar la misma mutación en bucle. Comprobar primero si el PR ya existe:
+   `gh pr list --head <rama> --state all --json number,url,state`.
+2. Si no existe, crearlo por el endpoint REST:
+   `gh api repos/<owner>/<repo>/pulls -f title="..." -f head="<rama>" -f base="main" -f body="..."`
+   (responde `201` con `Location: .../pulls/<n>`). Alternativa: abrir la URL que imprime `git push`.
+3. Confirmar con `gh pr view <n> --json number,url,state,mergeable` y seguir con CI.
+
+Un error ambiguo puede haber creado el PR aunque la respuesta falle: verificar antes de repetir evita duplicados.
+
 ## Limpieza — nada se queda abierto
 Regla para Claude, subagentes y motores: lo que abras para trabajar (servidor de dev, puerto, `cmd`/`powershell`
 en background, watcher, Godot/node/python de prueba, contenedor, túnel, pestaña de preview) **lo cierras cuando

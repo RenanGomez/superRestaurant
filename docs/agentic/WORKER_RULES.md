@@ -18,6 +18,9 @@ este archivo, manda el brief y se anota la diferencia en el reporte.
   tarea contra la rama que indique el brief.
 - **Nunca** hagas push a `main` ni fusiones PRs. Tampoco force-push, rebase
   destructivo ni reescritura de historia compartida.
+- Si `gh pr create` falla con `GraphQL: Something went wrong`, no reintentes en
+  bucle: comprueba `gh pr list --head <rama> --state all` y crea el PR por REST
+  (`gh api repos/<owner>/<repo>/pulls -f title=... -f head=... -f base=... -f body=...`).
 - Commits convencionales y pequeños (`feat(modulo): …`, `fix(modulo): …`); incluye
   el id del ítem. Haz commit y push en cada paso verde: el trabajo no se pierde.
 - PR de menos de 400 líneas cambiadas sin contar tests ni generados. Si no cabe,
