@@ -1,9 +1,9 @@
 ﻿{
     "version":  "2.0.0",
     "milestone":  "M2/ola-0",
-    "updatedAt":  "2026-11-25",
+    "updatedAt":  "2026-11-26",
     "source":  "docs/plans/plan-deepseek-fases-3-8.md",
-    "notes":  "M1/M2 cerrados (M2 con puertas humanas). M3: dominio, contratos, catalogo, ledger, recetas y compras fusionados o en PR; API con P1 de grants; consumo por venta pendiente.",
+    "notes":  "M1/M2 cerrados (M2 con puertas humanas). M3: API de inventario completa y UI con insumos, recetas, almacenes, movimientos, compras, alertas y costos (#99-#114); contratos HTTP de inventario en verde; faltan journey E2E, pase visual real y el cierre de deuda P3.",
     "items":  [
                   {
                       "id":  "m1-z2b-confirm-pizza-v2",
@@ -1591,7 +1591,7 @@
                       "paths":  [
                                     "apps/web/src/app/app/inventario"
                                 ],
-                      "note":  "PR #99 Insumos/Almacenes, #108 Movimientos (ajuste/merma/transferencia) y #109 Recetas (publicar versiones). Faltan Compras, Alertas y la verificacion visual real (desktop y 390x844)."
+                      "note":  "PR #99 Insumos/Almacenes, #108 Movimientos, #109 Recetas, #113 Compras (proveedores, OC idempotente, recepcion) y #114 Alertas/costos (minimo, costo medio, costo de receta y margen). Pendiente: verificacion visual real (desktop y 390x844) y journey E2E."
                   },
                   {
                       "attempts":  0,
