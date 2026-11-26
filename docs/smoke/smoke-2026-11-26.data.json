@@ -1,5 +1,5 @@
 {
-  "sub": "Ronda 2026-11-26 (cierre de M3): pase visual real de las seis pestañas en escritorio y 390×844, journey E2E de inventario en verde, almacén predeterminado por sucursal y cierre del EXECUTE del ledger crudo. Migraciones 01200 y 01300 aplicadas en dev con el protocolo 19.6.",
+  "sub": "Ronda 2026-11-26 (Ola 4): verificadores historicos corriendo otra vez, lecturas de compras con catalog.read, migracion 01400 aplicada en dev e identidad de dispositivo estable. Las revisiones de M2 dejaron abiertos dos P1 de purga offline y el lider entre pestanas.",
   "sections": [
     {
       "t": "0. Preparación",
@@ -142,6 +142,22 @@
   "r2": {},
   "changes": [
     {
+      "h": "Verificadores historicos desde cero",
+      "p": "verify:menu-shared-modifier-groups-schema:rollback, verify:menu-locked-ingredients-schema:rollback y verify:capture-schema:rollback vuelven a correr sobre un PostgreSQL desechable: fixture normalizado a begin/commit, copias pineadas en supabase/tests/historical, seed corregido y modo local de capture. Antes ninguno de los tres podia ejecutarse."
+    },
+    {
+      "h": "Compras: lecturas con catalog.read",
+      "p": "Proveedores y ordenes se leen con catalog.read en el servicio y en SQL (viewer, auditor, cashier, waiter, supervisor); kitchen y courier siguen en 42501 y las escrituras siguen exigiendo catalog.manage. La pestana Compras aun no carga para esos roles: queda como P2."
+    },
+    {
+      "h": "Identidad de dispositivo de inventario",
+      "p": "El deviceId de la recepcion de compras pasa de sessionStorage a localStorage por perfil, con helper puro y pruebas. Sigue siendo traza de auditoria: la autorizacion es la sesion y el RBAC."
+    },
+    {
+      "h": "Migracion 20261126001400 en dev",
+      "p": "Aplicada con el protocolo 19.6 (sonda rollback-only de 12 sentencias, respaldo verificado, dry-run exacto, apply unico y postcheck con grants y catalogo 69/15/160). lastRemote=20261126001400."
+    },
+    {
       "h": "Ledger crudo cerrado a app_api",
       "p": "app_api ya no puede ejecutar inventory_record_movement; los movimientos manuales pasan por inventory_record_manual_movement, que fija la fuente a inventory_manual y limita los tipos. La prueba SQL verifica el 42501 explícito."
     },
@@ -159,6 +175,10 @@
     }
   ],
   "decisions": [
+    {
+      "h": "M2 no se declara al 100%",
+      "p": "Las revisiones de la Ola 0 encontraron dos P1 de purga offline (decideOfflinePurge sin llamador y purgeReplica rechazando STORAGE_LOCKED) y un P2 de lider entre pestanas. Se abren o0-purge-wire y o0-leader-wire; sin ellos M2 no se cierra."
+    },
     {
       "h": "Worktrees de dsh dentro del repo",
       "p": "El sandbox de dsh rechaza leer y escribir fuera del repositorio; config.dsh.worktreeDir apunta a .harness/worktrees (ignorado por git) para que los workers puedan trabajar y el orquestador revise."

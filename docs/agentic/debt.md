@@ -1,181 +1,179 @@
-# Deuda tecnica (P3)
+# Deuda tecnica
 
-Hallazgos P3 y atajos registrados. No se ejecutan durante el hito abierto: se
-revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
+Hallazgos P2/P3 y atajos registrados. Se revisa al cerrar cada ola (barrido `debt-p3-sweep`).
 
-## Formato
+**Regla de este fichero:** una entrada vive en **Activa** solo si hoy tiene impacto demostrable o riesgo
+de dinero, datos, tenancy o seguridad; cada una lleva dueño y siguiente accion. Lo que ya no aplica o no
+tiene impacto operativo pasa a **Archivada** con fecha y motivo (la version completa esta en el historial
+de git). Nada se borra sin dejar rastro.
 
-| Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
-|---|---|---|---|---|---|
-| - | - | - | - | - | - |
+Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ola 4 se marcan con el PR.
 
-## Registradas
+## Activa — muerde hoy
 
-- **m1-obs-health:** el correlationId solo aparece en la línea de acceso HTTP; los demás logs no lo heredan. Incorporar AsyncLocalStorage para propagar el contexto de request entre capas y pruebas de concurrencia antes de depender de correlación transversal.
+### Dinero y operacion
+- **P2 · validacion de montos en zonas/entrega (`m3-rev-zonas`)** — `20261123000500` no valida
+  incondicionalmente la paridad de moneda de `capture_delivery_manual_fees` y `frozen_quote` contra
+  `p_order->>'currency'`, y `deliveryCharge.amount.amountMinor` se compara con `::text::numeric`
+  (acepta `2500.0`, puede lanzar 22P02). Dueño: siguiente ola de SQL. Accion: `jsonb_typeof = 'number'`
+  + regex de entero + paridad de moneda en la misma migracion con sus invariantes.
+- **P3 · `transfer_out` puede dejar el almacen origen en negativo** — no hay guarda. Dueño: producto.
+  Accion: decidir bloquear o alertar antes de la UI de conteo; si se bloquea, migracion con invariante.
+- **P3 · `list_inventory_movements` devuelve `recipe_version_id = null` siempre** (`20261126000800`
+  fija `null::uuid`). La trazabilidad vive en `app.inventory_consumptions`. Dueño: siguiente ola de
+  inventario. Accion: migracion que una ambas tablas o retirar el campo del contrato.
+- **P3 · `CashMovement`/reabrir turno con cruce de medianoche en caja mobile** — el selector usa la
+  fecha de hoy y puede no ver el turno abierto. Dueño: mobile. Accion: usar la fecha de apertura de
+  `state.shift` y prueba de cruce.
+- **P3 · `transfer_out`/`receive` de compras sin asercion de `EXECUTE` negativa para
+  `public/anon/authenticated/service_role`** — la tienen movimientos, no almacenes ni compras. Dueño:
+  siguiente migracion de inventario. Accion: completar las aserciones en `inventory_*_invariants.sql`.
 
-- **m1-sec-rate-limit:** (1) no existe límite por cuenta: web, mobile y KDS inician sesión directamente contra Supabase Auth, que debe aplicar su propia protección de credenciales; el API solo limita intentos de token en su frontera. (2) Los contadores viven en memoria por proceso; reinicios y réplicas no comparten cuota. Adoptar almacenamiento compartido antes de depender de estos límites en producción. (3) El borde confía en `x-forwarded-for` solo con `RATE_LIMIT_TRUST_FORWARDED_FOR=true` y `RATE_LIMIT_TRUSTED_PROXY_HOPS` acotado (1..10, por defecto 1); debe desplegarse exactamente la cadena de proxies declarada o el guard vuelve a la IP del socket.
+### Tenancy, permisos y sync
+- **P2 · el proxy de sync valida `body.scope` contra la cookie, no cada evento** — un evento con
+  `restaurantId`/`branchId` distintos depende de que el API responda `PUSH_SCOPE_VIOLATION`.
+  Dueño: sync. Accion: validar por evento en el proxy o documentar la dependencia con prueba.
+- **P2 · pruebas de conflictos de sync debiles** (`two_devices_add_lines`, `cancel_vs_kds_preparing`,
+  `concurrent_same_line_edit`, sin push HTTP real hacia `manual_review`) y
+  `test:sync-conflicts:local` fuera de CI. Dueño: sync. Accion: llevar la suite a `pg-verify` y añadir
+  un push HTTP que produzca `manual_review`.
+- **P3 · RBAC duplicado en SQL (PR #131)** — la lista de roles con `catalog.read` de
+  `20261126001400_inventory_purchasing_reads.sql` copia `apps/api/src/auth/rbac-policy.ts`. Dueño:
+  inventario. Accion: cuando cambie la matriz, cambiar la migracion; considerar una prueba que compare
+  ambos conjuntos.
+- **P3 · comentarios «manage-only» desactualizados en la BD (PR #131)** — `comment on function` de
+  `20261126001000` sigue describiendo las tres lecturas como solo-manager; no se puede corregir
+  editando una migracion aplicada. Dueño: inventario. Accion: migracion de comentarios en el proximo
+  cambio del modulo.
+- **P3 · `items.service.ts` mapea cualquier `42501` a 403** — un fallo real de privilegios se presenta
+  como "no autorizado". Dueño: API. Accion: distinguir por `message` acotado cuando exista un segundo
+  42501.
+- **P3 · `list_inventory_*` exige membresia pero no `catalog.read` en SQL** (movimientos/recetas) —
+  el API lo frena antes. Dueño: SQL. Accion: mover la matriz a SQL como en compras si aparece otro
+  consumidor.
+- **P3 · `sync_review_event_facts` y commands sin RLS ni triggers de inmutabilidad;**
+  `sync_read_reviews` sin paginacion; cursor sin `deviceId` y con expiracion fija de 30 dias. Dueño:
+  sync. Accion: cerrar en la ola de auditoria de seguridad (M6).
+- **P3 · rechazos `AUTH_REVOKED`/`DEVICE_REVOKED` del sync solo se registran parcialmente** y un token
+  se verifica por evento (N por push). Dueño: sync. Accion: cachear la verificacion por push y añadir
+  asercion de log estructurado.
 
-| Fecha | Hito | Item | Descripcion | Motivo del atajo | Seguimiento |
-|---|---|---|---|---|---|
-| 2026-11-22 | AO M0 | P2 · smoke E2E limitado | El smoke de Playwright solo cubre `/health` y `/login`; no ejercita flujos de producto. | Prioridad a desbloquear el CI de M0. | Ampliar los flujos E2E al cierre del hito. |
-| 2026-11-22 | AO M0 | P2 · guardia CI opcional en `database.ts` | En `apps/api/src/database.ts` la guardia ligada a `CI === "true"` es opcional y no se ejerce fuera de CI. | Se mantiene para no alterar el arranque local. | Revisar al cierre del hito y hacerla explícita. |
-| 2026-11-22 | AO M0 | P3 · robustez de `stop()` en `local-postgres` | `LocalPostgres.stop()` puede dejar limpieza incompleta si fallan `pg_ctl` o `admin.end()`. | Solo afecta a fixtures locales desechables. | Endurecer la limpieza en una tarea mecánica. |
-| 2026-11-22 | M1 | P2 · `registerId = deviceId` en cobro mobile (`m1-mobile-pay-note`) | `apps/mobile/src/ui/app.tsx` usa `deviceId` como `registerId` al consultar `/api/v1/cash-registers/report` y `/api/v1/payments/checkout`; no descubre ni permite elegir otra caja abierta de la sucursal ni abrir caja desde mobile. | Reutilizar los endpoints existentes sin introducir nuevas rutas o migraciones en nivel C. | Añadir selección de caja abierta o apertura controlada cuando se amplíe la operación de caja en mobile. |
-| 2026-11-22 | M1 | P3 · tabla `FRACTION_DIGITS` duplicada (`m1-mobile-pay-note`) | `apps/mobile/src/money.ts` define `FRACTION_DIGITS` (incluyendo `XTS` para fixtures) en paralelo a `apps/web/src/lib/money-scale.ts`. | Evitar tocar `packages/shared-types` (carril de un solo escritor) en una tarea de nivel C. | Consolidar una tabla compartida de escala monetaria por código ISO en `packages/shared-types` al cerrar M1. |
-| 2026-11-23 | M1 | P3 · foco explícito y etiquetas de colonias guardadas en Z4 (`m1-visual-verify-r2`) | En `apps/web/src/app/app/delivery-zones/delivery-zones-editor.tsx` (líneas 211 y 232), los chips de colonias seleccionadas y el `<summary>` de cobertura heredada no declaran `focus-visible:outline-*` explícito; además las colonias ya guardadas se muestran como `Colonia <id8>` (línea 89). | Auditoría solo lectura (`m1-visual-verify-r2`); no se modifica código. | Añadir clases `focus-visible` consistentes con `uiChip`/`uiButton` y resolver nombres de colonias guardadas al abrir una zona. |
-| 2026-11-23 | M1 | P3 · copy desactualizado en `messages.invalid` de Z5 (`m1-visual-verify-r2`) | `apps/web/src/app/app/customers/customer-editor.tsx` (línea 32) sigue diciendo «completa calle, localidad y país» aunque Z5 ocultó los campos localidad y país en `AddressForm`. | Auditoría solo lectura (`m1-visual-verify-r2`); no se modifica código. | Actualizar el texto de validación para mencionar calle y colonia. |
-| 2026-11-23 | M1 | P3 · foco de modales y listener de atajos en K2 (`m1-visual-verify-r2`) | Los modales de `apps/web/src/app/app/global-shortcuts.tsx` (líneas 61-76) y «Cancelar captura» en `apps/web/src/app/app/capture/capture-workspace.tsx` (líneas 1406-1421) no usan `trapFocusIndex` ni restauran el foco al cerrarse; el `useEffect` de `keydown` en `capture-workspace.tsx` (líneas 1102-1142) no declara arreglo de dependencias. | Auditoría solo lectura (`m1-visual-verify-r2`); no se modifica código. | Reutilizar `trapFocusIndex` y retorno de foco como en `ProductSheet`/`PhoneRemovalDialog`, y estabilizar dependencias del listener. |
+### Pruebas visuales y e2e
+- **P2 · `offline-kds.spec.ts` puede dar verde falso (`o0-rev-visual`, 2026-11-26)** — no usa
+  `expectFinalRoute`/`assertBranchState` (`apps/web/e2e/visual/offline-kds.spec.ts:27-32`), asi que una
+  redireccion a `/app` o `/login` deja el caso en verde. Dueño: pruebas visuales. Accion: usar el helper
+  de ruta final y assertar el estado de sucursal.
+- **P3 · `networkidle` con `catch` silenciado** en el mismo spec: puede fotografiar un shell de carga.
+  Dueño: pruebas visuales. Accion: anclar a un elemento de datos y fallar si no aparece.
+- **P3 · `assert-ui.ts` cuenta 404/501 de `/api/sync/*` como fallo de red** (backend sin desplegar),
+  `accessibleName` ignora `img alt`, hay un `mkdirSync` redundante, `focus-visible` solo examina el
+  primer Tab, y los insets no-`px` se leen como 0. Dueño: pruebas visuales. Accion: ajustar el helper y
+  añadir los casos limite que faltan (44×43, 43×44, inset en `rem`, `::after`, control `static`).
 
-## M0-7 — pg-verify (en curso)
+### Offline, dispositivos y configuracion
+- **P1 · la purga offline no esta conectada en produccion (`o0-rev-web-purge`, 2026-11-26)** —
+  `decideOfflinePurge` (`apps/web/src/lib/offline/sync-purge.ts:25-44`) no tiene llamador de
+  produccion: el sign-out real usa `store.purge()` del puente y `AUTH_REVOKED`
+  (`web-sync-bridge.ts:409-410`) solo pone `sync_blocked`. Ademas `purgeReplica`
+  (`sync-store.ts:305-306`) rechaza con `STORAGE_LOCKED`, asi que "bloquear y purgar la replica" es
+  inalcanzable por construccion. Dueño: web offline. Accion: cablear el evento en el runtime, permitir
+  la purga de replica con el meta bloqueado conservando la clave del outbox, y pruebas end-to-end.
+- **P2 · el lider de pestañas no tiene consumidor productivo** — `offline-runtime-mount.tsx:84-102` no
+  usa `acquireSyncLeader` (#73 lo dejo como modulo y #85 solo registro la prueba), asi que varias
+  pestañas siguen corriendo su propio `DeviceSyncEngine`. Por esto `o0-wire` no cierra. Dueño: web
+  offline. Accion: montar el lider, no sincronizar en seguidores y probar la perdida de lock.
+- **P2 · `acquireSyncLeader` sin timeout para el seguidor** (`sync-leader.ts:49-51,97`): mientras el
+  lider vive, el seguidor nunca resuelve y no puede pintar su cola. Dueño: web offline. Accion:
+  `AbortSignal`/timeout y resultado explicito de "no soy lider".
+- **P2 · `ACTOR_MISMATCH`/`DEVICE_UNKNOWN` se siguen emitiendo como `AUTH_REVOKED`/`DEVICE_REVOKED`**
+  (`apps/api/src/sync/sync-merge-executor.ts:48-55`): el cliente revoca scope y manda financieros
+  pendientes a revision manual por causas que no son revocacion. Dueño: sync. Accion: separar el cable
+  (no solo el log) o justificar la retencion con una prueba de comportamiento.
+- **P2 · la pestaña Compras queda vacia para `viewer`/`auditor` (PR #131)** — los `useEffect` de
+  `apps/web/src/app/app/inventario/purchasing-panel.tsx:113,138,163` no cargan sin `canManage`, aunque
+  la API ya permite leer. Dueño: UI inventario. Accion: cargar con `catalog.read` y ocultar solo las
+  acciones de escritura.
+- **P2 · `verify:capture-schema:rollback` cae en modo remoto con argumentos extra** — compara la cadena
+  exacta de `argv` (`run-capture-schema-verification.ts:15`); cualquier argumento adicional ejecuta
+  `verifyRemote()` en vez de rechazar. Dueño: verificadores. Accion: exigir exactamente
+  `--local-disposable-only` o `--remote-only` y fallar cerrado.
+- **P3 · `CUSTOMER_ADAPTER_VERIFICATION` tambien se lee en modo local** (corrida no hermética) y
+  `docs/architecture/P2_MULTICHANNEL_CAPTURE_SLICE.md:7` sigue documentando el verificador como remoto.
+  Dueño: verificadores. Accion: ignorar la variable en local y actualizar el doc.
+- **P2 · identidad de dispositivo por equipo** — `debt-device-id` (Ola 4) la persiste por perfil de
+  navegador y documenta que el servidor autoriza por actor; validar `x-device-id` y el `deviceId` de
+  recepcion contra `app.sync_devices` exige una funcion `app_private` de lectura + migracion.
+  Dueño: inventario/sync. Accion: crear esa funcion y la prueba de rechazo de dispositivo ajeno.
+- **P2 · `SYNC_CURSOR_SECRET` de produccion** — rotarlo invalida cursores. Dueño: operacion.
+  Accion: definirlo (>=32) antes de desplegar y documentar la rotacion en el runbook.
+- **P2 · `registerId = deviceId` en el cobro mobile** — no descubre ni permite elegir otra caja abierta
+  de la sucursal. Dueño: mobile. Accion: seleccion de caja abierta o apertura controlada.
+- **P3 · `FRACTION_DIGITS` duplicada** en `apps/mobile/src/money.ts` frente a
+  `apps/web/src/lib/money-scale.ts`. Dueño: shared-types. Accion: consolidar una tabla por codigo ISO.
+- **P3 · mobile offline sin verificacion en dispositivo real** — banner, cola, SQLCipher y
+  `navigator.onLine`. Dueño: Emmanuel (puerta humana). Accion: emulador/dispositivo antes de prometer
+  offline en mobile.
 
-- Los cinco invariantes SQL antes tolerados pasan en PostgreSQL 17.6 local tras aplicar todas las migraciones: se corrigieron los fixtures de identidad, privilegios y contratos históricos/actuales. El job completo pasó en el PR #19 para `114b91e4`; pendiente CI de la nueva cabeza.
-- El `503 ORDER_UNAVAILABLE` del detalle de entrega quedó corregido: el parser acepta y valida los campos de asentamiento del snapshot, conservando compatibilidad histórica. El flujo HTTP local pasó 7/7 y el job HTTP pasó en el PR #19 para `114b91e4`.
-- **P2 · verificador histórico de grupos compartidos:** `verify:menu-shared-modifier-groups-schema:rollback` rechaza el fixture porque `extractMigrationBody` exige `COMMIT` y el fixture termina en `ROLLBACK`. El test directo pasa; reconciliar el arnés sin dejar datos persistentes.
-- **P2 · verificador histórico de Capture:** `verify:capture-schema:rollback` ejecuta la prueba actual de dirección incompleta antes de la migración `20260917000100`; la función histórica devuelve `conflict` y la prueba espera `rejected`. No se ejecuta en `pg-verify`; reconciliar la secuencia sin modificar migraciones aplicadas.
-- Los verificadores rollback de selección, pizza V2 y transferencia pasaron localmente. No se aplicaron migraciones remotas.
-- **P3 · printing Bluetooth (#42):** `declare function setTimeout` manual en bluetooth-printer.ts:14 (usar types node); backoff 3 intentos/100-200 ms fijo, hacerlo configurable con el adaptador movil real; el error de conexion descarta la causa (registrar en el adaptador de plataforma). Sin adaptador BLE/SPP real ni prueba con impresora fisica.
+### Observabilidad y herramientas
+- **P3 · `correlationId` solo en la linea de acceso HTTP** — no se propaga entre capas. Dueño: api.
+  Accion: AsyncLocalStorage + prueba de concurrencia antes de depender de correlacion transversal.
+- **P3 · rate limit sin cuota compartida ni por cuenta** — contadores en memoria por proceso; Auth de
+  Supabase cubre credenciales; `x-forwarded-for` solo se confia con la cadena de proxies declarada.
+  Dueño: operacion. Accion: almacenamiento compartido y despliegue exacto de `RATE_LIMIT_*`.
+- **P3 · auditor visual: `insetsFromPseudo` no comprueba bloque contenedor, overflow ni oclusion.**
+  Hoy todos los `FieldHint` son `relative`. Dueño: pruebas visuales. Accion: comprobar el bloque
+  contenedor antes de ampliar el uso de pseudo-elementos.
+- **P3 · `warehouseSaved` recarga toda la lista** y puede sustituir una lista valida por el panel de
+  error. Dueño: UI inventario. Accion: parchear la fila guardada en estado.
+- **P3 · `isDefault` obligatorio sin bump de contrato** — API y web deben desplegarse juntos; un bundle
+  cacheado invalida la lista completa (`exactRecord`). Dueño: contratos. Accion: versionar el contrato
+  al proximo cambio de inventario.
+- **P3 · sin `CHECK (not (is_default and not active))`** en almacenes; el invariante depende del
+  envoltorio y del indice parcial. Dueño: SQL. Accion: añadirlo en la proxima migracion de almacenes.
+- **P3 · `storageState` de Playwright dura ~1 h y el pase visual rota el refresh token** — usar
+  `tools/agentic/local-servers/refresh-e2e-session.mjs` antes de cada corrida; si responde
+  `refresh_rejected`, login manual. Dueño: operacion de pruebas. Accion: documentado en runbook.
+- **P3 · sandbox de dsh** — no lee/escribe fuera del repo y rechaza `$env:TEMP`; worktrees en
+  `.harness/worktrees`. Dueño: harness. Accion: briefs con "no escribas fuera del repo" en la primera
+  linea (aplicado).
+- **P3 · verificador de impresion Bluetooth (#42)** — `declare function setTimeout` manual, backoff
+  fijo 3×100-200 ms y error de conexion sin causa; sin impresora fisica. Dueño: impresion. Accion:
+  usar tipos node, backoff configurable y registrar la causa; probar con equipo real.
+- **P3 · `list_inventory_recipes` no filtra por `modifier_id`** y el parser acepta ULID y cantidades sin
+  tope (SQL exige UUID y <=9 digitos). Dueño: inventario. Accion: alinear parser y SQL.
+- **P3 · journey E2E no puede despublicar una receta** — si el producto nunca tuvo receta activa, deja
+  la suya publicada. Dueño: inventario. Accion: endpoint de despublicacion o fixture por `runId`.
+- **P3 · `deviceId` de recepcion en el cuerpo (no como `x-device-id`)** — inconsistente con
+  movimientos. Dueño: inventario. Accion: unificar en la proxima revision de contrato.
 
-## PR #47 (mobile mesas/comanda/selector de caja) — P2/P3 de revision Claude (2026-11-23)
+## Archivada — sin impacto (2026-11-26)
 
-- P2: el selector de caja usa `getDaySummary` con fecha de hoy; un turno que cruza medianoche no aparece y el endpoint de reportes puede exigir permiso de supervisor (regresion para cajero). Confirmar permiso del rol cajero o usar la fecha de apertura de `state.shift`; anadir prueba de cruce de medianoche en `register-selection`.
-- P2: el efecto de cajas depende de `state.branch`/`state.shift` por identidad; depender de `state.shift?.shiftId` y `state.branch?.timeZone` para no borrar la caja elegida.
-- P2: `sendPending` reintenta con expectedVersion viejo si el fallo no es 409; confirmar codigo de conflicto del API y limpiar tambien ahi.
-- P3: etiqueta de caja ilegible (8 chars de UUID); ocupacion solo en texto sin color/icono; formato de props; falta prueba de `order-kitchen` y `register-selection`; verificacion visual 390x844 pendiente.
-
-## PR #51 (confirm_capture_draft_v3 pizza v2 + cobertura de zonas) — P2/P3
-
-- P2: la paridad de moneda de `capture_delivery_manual_fees` y `frozen_quote` contra `p_order->>'currency'` no se valida incondicionalmente (migración 20261123000500, ~599-625).
-- P2: `deliveryCharge.amount.amountMinor` se compara con `::text::numeric`; acepta `2500.0` y puede lanzar 22P02. Validar `jsonb_typeof = 'number'` y regex de entero.
-- P2: `enforce_delivery_zone_coverage_nonempty()` lee `app.delivery_zones` sin `FOR SHARE` (write-skew con SQL directo concurrente).
-- P3: la migración 000500 se nombra 000400 en HANDOFF y en un comentario de `delivery_zones_invariants.sql`.
-- P3: `delivery_quote_expired` ahora aplica también a cotizaciones con tarifa manual (cambio de comportamiento; reflejar en smoke).
-- P3: falta prueba negativa de fuga entre restaurantes/sucursales específica de `confirm_capture_draft_v3`.
-- P3: `CREATE CONSTRAINT TRIGGER` no revalida zonas activas preexistentes solo con `localities`.
-- Protocolo pendiente: la migración no está aplicada en remoto (rollback-only, dry-run y staging primero, §19.6).
-
-## PR #53 y #54 (sync M2) — P2/P3
-
-- #53 P3: la suite `test:sync-conflicts:local` es opt-in y no está cableada en CI; la revisión Claude fue estática (agy sin cuota).
-- #53 P3: `viewer` asume membresía activa en branchA (sin aserción previa); la revocación se prueba con UPDATE directo, no con la función de producto; resultado fijo `{effect:"payment-1"}` en `record`; aclarar comentario de independencia por scope.
-- #53 P3: BOM y CRLF en `sync-conflicts.local.test.ts`; `nowIso()` no determinista.
-- #54 P2: offline, el titular promete "se guardó en este dispositivo" sin cola local persistente; reformular hasta que exista.
-- #54 P3: `formatSyncAmountMinor` antepone `$` a cualquier moneda; sin pruebas de render ni Server Actions; "Conexión" queda en "Más" en móvil; `getSession()` en servidor (usar `getUser()`).
-- #54: verificación visual contra stubs (404 en `/api/v1/sync/*`), sin PostgreSQL real; repetir con API real cuando exista push/pull.
-
-## PR #56, #58, #59 y #60 (offline M2) — P2/P3
-
-- #56 P2/P3: almacenamiento móvil cifrado revisado por Claude (agy sin cuota); sin prueba en dispositivo nativo, solo Node; pendiente verificar `expo-sqlite` real en Android/iOS.
-- #58 P2: `kds-local.test.ts` no prueba el flujo "el servidor reemplaza la caché" (solo un filtro puro); extraer `applyServerList(received, scope)` y probarlo con caché {A,B} y servidor {A}.
-- #58 P3: sin pruebas del backoff de reconcile, del mensaje `SYNC_UNAVAILABLE` ni de la purga de `signOut`; la purga es best-effort (si falla se hace logout igual y puede quedar caché/outbox del actor anterior).
-- #59 P2: con un puerto offline registrado el banner promete "crear órdenes locales" y "cobrar en efectivo sin conexión" aunque no exista `commitLocalOperation` ni pantalla que lo use; hoy no se registra ningún puerto, pero reformular antes de conectarlo.
-- #59 P2: el `<summary>` de operaciones bloqueadas mide ~18.6 px (mínimo 44 px).
-- #59 P3: en `sync_blocked` online el summary dice "bloqueadas sin conexión"; el mensaje muestra la ruta literal `/app/sync`; el tope offline ignora el importe; sesión fija en el puerto.
-- #60 P3: un evento con IDs mal formados se rechaza como `INVALID_PAYLOAD` sin registro en el ledger (no cabe), así que no deja huella de auditoría.
-- #60 P3: el rechazo `AUTH_REVOKED`/`DEVICE_REVOKED` no se audita en log estructurado; el token se verifica una vez por evento (N por push); `unknown` de dispositivo se trata como `DEVICE_REVOKED` (usar `DEVICE_UNKNOWN`); `ACTOR_MISMATCH` se reporta como `AUTH_REVOKED`.
-- #60 P3: `sync-push.test.ts` usa mock del ledger; la semántica real la cubre solo la verificación PostgreSQL de CI; falta aserción explícita de grants (`sync_device_state` y `sync_write_allowed` solo para `app_api`).
-- Protocolo pendiente: las migraciones 20261121000100, 20261123000300, 20261123000400 y 20261123000500 no están aplicadas en remoto (rollback-only, dry-run y staging primero, §19.6).
-
-## PR #62 (almacén cifrado web offline) — P2/P3
-
-- P2: el protocolo de pestaña obsoleta (STORAGE_COMMIT_FAILED → descartar motor, recargar, reintentar con la misma key) depende del llamador; falta prueba a nivel de motor y elección de líder o serialización entre motores antes de activar offline.
-- P2: faltan rotación de clave (`keyVersion`), purga al cerrar sesión o AUTH_REVOKED, y `restaurantId`/`branchId` en la AAD como defensa en profundidad; la clave no extraíble vive en el mismo IndexedDB y no protege frente a XSS.
-- P3: `sync-transport` sin timeout por defecto cuando `timeoutMs` es 0 o ausente (proponer 30 s); sin respeto de `Retry-After` en 429/503.
-- P3: los archivos del PR quedaron en CRLF; normalizar a LF. Falta verificación en navegador real del almacén IndexedDB.
-
-## PR #63 (banner y cola offline mobile) — P2/P3
-
-- P2: verificación visual NO realizada: el harness móvil (`apps/mobile/harness`) no simula conectividad offline ni cola, y `expo-sqlite` no está en el entorno de bundle web. Pendiente en dispositivo/emulador o ampliando el harness antes de activar offline (puerta 5 de §19.6).
-- P3: la prueba de doble disparo cubre el helper y el motor, no el componente (guard por ref y clave en `App` sin test de UI).
-- P3: se eliminó el reintento por ítem de la cola; queda solo "reintentar todo". Implementar retry por evento si se necesita.
-- P3: `navigator.onLine` puede no existir en React Native; verificar en runtime móvil que el banner llegue a mostrar "Sin conexión".
-- P3: `lastConfirmedSyncAt` usa la hora del dispositivo.
-
-## PR #65 sync pull/review (m2-api-sync-pull)
-
-- P3: mapeo de códigos de error del pull/review incompleto; sin pruebas de controller/RBAC de `sync-review.controller`.
-- P3: el cursor no incluye `deviceId` y tiene expiración fija de 30 días; una página con fallo de parseo de respuesta puede envenenar el avance.
-- P3: un caso histórico sin facts solo puede rechazarse, no compensarse.
-- P3: `sync_review_event_facts` y commands sin RLS ni triggers de inmutabilidad; `sync_read_reviews` sin paginación.
-- P3: la prueba con mock no afirma `deviceId`.
-- Operación: `SYNC_CURSOR_SECRET` (>=32 caracteres) debe definirse en todas las instancias antes de desplegar; rotarlo invalida cursores. Migración 20261123000600 sin aplicar en remoto.
-
-## PR #66 mobile crypto (m2-mobile-local-storage-crypto)
-
-- P2: sin pruebas de UI/hook para la carrera `!alive` ni la ruta resume/locked del banner.
-- P3: cabecera de documento sin autenticar (límite de amenaza documentado); exclusión de backup en iOS; salt HKDF vacío (documentar en ADR-005).
-- Pendiente: pregunta del puente runtime-bridge (la barra debe reflejar la cola local real); verificación en dispositivo real imposible en este entorno.
-
-## PR #67 KDS offline cache (m2-kds-offline-cache)
-
-- P3: falta prueba KDS explícita de idempotencyKey estable tras push fallido y de error IO transitorio sin cuarentena (hoy cubierto por sync-engine); sin prueba de `clearKdsCache`/`clearKdsSyncState`.
-- Pendiente: verificación visual de KDS offline en navegador (desktop y 390x844).
-
-## PR #70 puente offline web (m2-web-runtime-bridge)
-
-- P2 resueltos en el PR: carrera release/commit (flag `closing`, relectura del outbox antes de purgar), actor ajeno (`ACTOR_MISMATCH`), tamano por bytes y content-length, timeout 30 s, Sec-Fetch-Site/content-type, pruebas de ruta.
-- P2: el proxy solo compara `body.scope` con la cookie; no valida `restaurantId`/`branchId` por evento (depende de `PUSH_SCOPE_VIOLATION` del API). Validar en el proxy o documentarlo.
-- P3: StrictMode abre/libera el bridge a la vez (serializar por device); `entityType`/`operation` sin tipar a `SyncEntityTypeV1`/`SyncOperationV1`; `release` cuenta `rejected` como confirmado y borra su evidencia; `getSession` vs `getUser`; catch vacio en el mount.
-- Pendiente: verificacion en navegador real (desktop y 390x844); e2e contra el puente real (m2-e2e-offline-web, rehecha tras cerrar #69).
-
-## PR #71 conflictos de sync (m2-api-sync-conflicts-tests)
-
-- P2: `two_devices_add_lines` solo prueba el ledger (el total lo calcula el test, no el servidor); `cancel_vs_kds_preparing` solo prueba monotonia de version (renombrar o probar cancelacion real); `concurrent_same_line_edit` sin dos dispositivos con `baseVersion` divergente; ningun push HTTP produce `manual_review` (se abre con SQL directo); la prueba `test:sync-conflicts:local` no esta enganchada a CI/pg-verify.
-- P3: `assertSyncConflictScenariosCovered` depende de `cover()` autodeclarado; tautologia en tombstone 11f; 11e prueba aislamiento con tipo no soportado; `SYNC_CURSOR_SECRET` del test vacuo y sobrescrito; `bootstrapTransactionalHttpApp` duplica `bootstrapHttpApp`.
-
-## Ola 0 solo-dsh (2026-11-25) — P2/P3 de revisión cruzada dsh
-
-- #73 o0-web-leader (A): P2 el seguidor de `acquireSyncLeader` espera sin timeout; P2 la prueba no está registrada en `apps/web/package.json` (lo hace `o0-wire`); P2 `acquireSyncLeader` aún no tiene consumidor productivo (debe conectarlo `o0-wire` en `offline-runtime-mount.tsx`); P3 `onLost` también se dispara en liberación voluntaria y no está documentado; P3 el fake de pérdida modela un modo que Web Locks real no produce sin `signal`.
-- #75 o0-mobile-banner-tests (B): P2 la suite no está en `apps/mobile/package.json` (lo hace `o0-wire`); P2 falta la carrera `openRuntime` resuelto después de `stop()` verificando `onDiscard`; P3 rama inalcanzable en `sync-banner-lifecycle.ts:88`.
-- #76 o0-visual-assert (C): P2 `offline-kds.spec.ts` no usa `expectFinalRoute` y una redirección a `/app` puede dejarlo verde; P3 el helper cuenta 404/501 de `/api/sync/*` como fallo de red (backend no desplegado); P3 `accessibleName` no considera `img alt`; P3 doble `mkdirSync`; P3 las reglas de consola/red/diálogos solo tienen caso que falla.
-- #77 o0-sync-p3 (B): pendiente de la revisión de pruebas; los P1 detectados por su revisión son del puente offline y se atacan en `o0-sync-devices` y `o0-bridge-p1`.
-- Puente offline (P1 heredados de #70, detectados por las revisiones de la Ola 0): ids de entidad con nibbles de versión/variante inválidos, payloads `order_add_line`/`cash_collect` no soportados reportados como `committed`, y ausencia de `POST /sync/devices`. Tareas creadas: `o0-sync-devices` (A) y `o0-bridge-p1` (A).
-
-## M3 inventario — estado tras fusionar #90 y #91 (2026-11-25)
-
-- **API de insumos (#90) P1 — cerrado:** se cerró con 8 funciones `app_private` SECURITY DEFINER (`20261126000600_inventory_api_functions.sql`), no con grants directos. Ver la decisión registrada abajo.
-- **API de insumos P2 — cerrado:** `23514`→400, `23503/23505`→409, `42501`→403; parser de `name` alineado a 160.
-- **Compras SQL (#91) P1 — cerrado:** creación idempotente por `(restaurant_id, idempotency_key)` con dedupe estructural y conflicto por sucursal/payload; pruebas de costo/moneda/proveedor ajeno.
-- **Compras SQL P1 — cerrado:** `received_by`/`received_device_id` escritos en la recepción y conservados en replay; pruebas de auditoría.
-- **Compras SQL P2 (abierto):** `app_api` conserva EXECUTE en `inventory_record_movement` y podría insertar un `receipt` sin pasar por la recepción (y bloquear la legítima por el único de source). Se retira con los wrappers de `m3-api-movements`.
-- **Ledger SQL (#86, fusionado) P3:** un `source_id` duplicado con clave nueva escapa como 23505 crudo; el API deberá mapearlo.
-- **Contratos (#88, fusionado):** `node-test-shims.d.ts` quedó en `tsconfig.json` de build; mover a test-only si molesta con `@types/node`.
-
-## M3 inventario - cierre P1 de #90 y #91 (2026-11-25, nivel A)
-
-- **Decision rechazada (registrada):** conceder USAGE del esquema `app` + SELECT/INSERT/UPDATE a `app_api` y politicas RLS permissivas habria cerrado el 42501 de la API de insumos, pero rompe el invariante que `apps/api/src/operations/app-api-recovery.ts` y `supabase/tests/tenancy_memberships_runtime_catalog.sql` exigen (`app_api` sin acceso directo a `app`) y permite leer inventario de otro restaurante si se filtra la credencial. Se cerro con 8 funciones `app_private` SECURITY DEFINER (`20261126000600_inventory_api_functions.sql`), alineado con ADR-013 §13.
-- **P3 (revision m3-rev-funciones-api):** `items.service.ts` mapea cualquier `42501` a 403; un fallo real de privilegios de BD se presentaria como "no autorizado". Distinguir por `message` acotado cuando exista un segundo codigo 42501.
-- **P3 (revision m3-rev-funciones-api):** el caso "foreign restaurant" de `items.test.ts` simula una fila que `read_*_for_manage` nunca devuelve a un no-miembro; en la BD real esa via da 404, no 403. Ajustar el test al comportamiento SQL (cubierto en `inventory_api_functions_invariants.sql`).
-- **P3 (revision m3-rev-funciones-sql):** `list_inventory_*` exige membresia activa pero no `catalog.read`; el API lo frena antes. Si se expone otro consumidor, mover la matriz RBAC a SQL.
-- **P3 (revision m3-rev-funciones-sql):** faltan aserciones `pg_proc` (`prosecdef`/`proowner`/`proconfig`) y casos de `update` para cashier y actor sin membresia en la prueba SQL de las funciones.
-- **P2 pendiente (compras):** `app_private.inventory_record_movement` conserva `EXECUTE` para `app_api`; hoy solo lo usan las funciones de recepcion. Al construir los wrappers por operación, retirar el grant y ajustar `inventory_ledger_invariants.sql`.
-
-## M3 inventario — P3 de la ola movimientos/recetas/UI (2026-11-25)
-
-- **P3 (movimientos):** `x-device-id` lo manda el cliente y se persiste como `device_id` sin comprobar que pertenezca al actor/sucursal (el actor sí es del servidor). Validarlo contra el registro de dispositivos cuando exista.
-- **P3 (movimientos):** `transfer_out` puede dejar el almacén origen en negativo; no hay guarda de saldo no negativo. Decidir la política (bloquear o alertar) antes de la UI de conteo.
-- **P3 (recetas):** `list_inventory_recipes` no filtra por `modifier_id`; el cliente debe filtrar por el campo devuelto.
-- **P3 (recetas):** el parser acepta ULID y cantidades sin tope, mientras el SQL exige UUID y ≤9 dígitos; termina en 400, no en fuga, pero conviene alinear.
-- **P3 (recetas):** las lecturas no validan sucursal activa como el publicador, y la prueba no ejercita concurrencia (la unicidad activa descansa en el advisory lock del publicador).
-- **P3 (UI inventario):** no existe helper de `inert`/`aria-hidden` de shell; el diálogo solo atrapa foco y cierra con Escape. Añadirlo cuando se unifique el patrón de diálogos.
-- **P3 (API):** `items.module.ts` quedó huérfano tras montar `ItemsController`/`ItemsService` en `AppModule`; borrarlo o unificar el patrón de módulos.
-
-## M3 inventario — P3 de la ola compras/contratos HTTP (2026-11-26)
-
-- **P3 (revisión `m3-rev-http-tests`):** `http-flow-inventory-api.ts` afirma `totalMinor === undefined` en la respuesta de creación, pero `CreatePurchaseOrderResultV1` nunca lo devuelve: la aserción es tautológica. El rechazo real (400 por `totalMinor` inyectado) ya cubre el contrato; puede retirarse.
-- **P3 (revisión `m3-rev-http-tests`):** el doble de `DATABASE_CLIENT` en `operations/http-test-app.ts` reimplementa la transacción (BEGIN/COMMIT/ROLLBACK) en lugar de reutilizar `runDatabaseTransaction` de `database.ts`; si falla `COMMIT` la conexión vuelve al pool sin marcarse. Unificar con el helper cuando se toque el arnés.
-- **P3 (revisión `m3-rev-http-tests`):** el replay de creación de OC solo cuenta órdenes; no comprueba líneas duplicadas ni la idempotencia de un segundo `POST /receive`.
-- **P3 (revisión `m3-rev-web-compras`):** el `deviceId` de recepción vive en `sessionStorage`, así que rota por sesión de navegador y debilita la traza del receptor. Decidir si el identificador de dispositivo debe persistir por equipo (registro de dispositivos) antes de producción.
-- **P3 (API de compras):** `listSuppliers`, `listPurchaseOrders` y `readPurchaseOrder` exigen `catalog.manage` (no `catalog.read`); la UI de compras ya no intenta leer sin ese permiso, pero semánticamente una lectura debería bastar con `catalog.read`. Cambiarlo exige pruebas de aislamiento nuevas.
-
-## M3 inventario — deuda de la ola de cierre (2026-11-26, sesión solo-dsh)
-
-- **P3 (auditor visual `m3-rev-visual-fixes`):** `insetsFromPseudo` no comprueba que el control sea el bloque contenedor del pseudo-elemento; un `::before` absoluto con inset negativo sobre un control `static` se ancla a un ancestro y podría dar por bueno un target pequeño. Tampoco modela `overflow:hidden`/`clip-path` de ancestros ni oclusión por z-index. Hoy todos los `FieldHint` son `relative` y el riesgo es teórico.
-- **P3 (UI almacenes `m3-rev-warehouse-api`):** la pestaña reimplementa el patrón de `CheckField`; los 44 px quedan en la etiqueta y el checkbox sigue en 20 px.
-- **P3 (UI almacenes):** `warehouseSaved` recarga toda la lista vía `loadWarehouses()`; si esa recarga falla después de guardar, la lista válida se sustituye por el panel de error.
-- **P3 (contratos):** `InventoryWarehouseV1.isDefault` es obligatorio sin bump de versión de contrato; API y web deben desplegarse juntos y un bundle cacheado contra un API viejo invalida la lista completa (`exactRecord`).
-- **P3 (SQL almacenes, `m3-rev-warehouse-sql`):** no hay `CHECK (not (is_default and not active))` a nivel tabla; el invariante depende del envoltorio y del índice parcial. Solo `postgres` escribe la tabla, así que el riesgo es de migraciones futuras.
-- **P3 (SQL almacenes):** falta la aserción negativa de `EXECUTE` para `public/anon/authenticated/service_role` en las funciones de almacén (sí está en las de movimientos) y la aserción `is_default_value is null` de la prueba es más débil de lo que podría ser.
-- **P3 (movimientos):** `list_inventory_movements` devuelve `recipe_version_id = null` siempre (`20261126000800` lo fija con `null::uuid`); la trazabilidad de la receta vive en `app.inventory_consumptions`. Exponerla exige una migración nueva que una ambas tablas.
-- **P3 (journey E2E):** la API no permite despublicar una receta; si el producto elegido nunca tuvo receta activa, el journey avisa por consola y deja la suya publicada. El `Almacén principal` que crea es fixture estable de la sucursal (sin `runId`) y se conserva a propósito.
-- **Operativo E2E:** el `storageState` guarda el access token de Supabase con ~1 h de vida y el middleware de la web rota el refresh token al navegar, así que un pase visual deja el archivo inservible para los journeys. `tools/agentic/local-servers/refresh-e2e-session.mjs` renueva el token del archivo sin abrir el navegador cuando el refresh token sigue vivo.
-- **Infraestructura de workers:** el sandbox de dsh rechaza leer/escribir fuera del repositorio; `config.dsh.worktreeDir` apunta a `.harness/worktrees` (ignorado por git). Los movimientos de worktree con `node_modules` ya instalado requieren `CI=true pnpm install` tras mover el directorio.
+- **2026-11-26 · P2 verificador historico de grupos compartidos** — resuelto en PR #130 (fixture
+  `begin;/commit;` + copias pineadas pre-`20261102000100`).
+- **2026-11-26 · P2 verificador historico de Capture** — resuelto en PR #130 (modo local desechable +
+  fixture pineado previo a `20260917000100`).
+- **2026-11-26 · P3 lecturas de compras con `catalog.manage`** — resuelto en PR #131 (servicio y SQL con
+  `catalog.read`; escrituras intactas).
+- **2026-11-26 · P2 `app_api` con `EXECUTE` en `inventory_record_movement`** — cerrado en #122 con
+  `inventory_record_manual_movement`.
+- **2026-11-26 · P3 `items.module.ts` huerfano** — eliminado en #115.
+- **2026-11-26 · P3 filas de prueba con `' cebolla '`** — el seed violaba `btrim(name)` desde el
+  catalogo base; corregido en PR #130.
+- **2026-11-26 · P2/P3 de #62 (lider entre pestanas, purga, `keyVersion`, AAD, timeout de transporte)**
+  — resueltos en #73, #74 y #77.
+- **2026-11-26 · P2 de #66 (carrera `!alive`, ruta resume/locked)** — resuelto en #75.
+- **2026-11-26 · P2 de #70 (carrera release/commit, actor ajeno, tamano, timeout, headers)** —
+  resueltos en el propio #70; queda solo la validacion por evento (activa).
+- **2026-11-26 · P3 foco explicito en chips de zonas y copy de `customer-editor`** — sin impacto
+  operativo; se recoge al unificar el patron de dialogos y al tocar ese editor.
+- **2026-11-26 · P3 modales de atajos/captura sin `trapFocusIndex`** — se recoge con el helper de
+  dialogos y `inert` (tambien pendiente como P3 de UI de inventario).
+- **2026-11-26 · P3 `node-test-shims.d.ts` en el tsconfig de build** — solo afecta a tipos de prueba.
+- **2026-11-26 · P3 smoke E2E limitado a `/health` y `/login`** — superado por los journeys (13) y el
+  pase visual 12/12.
+- **2026-11-26 · P3 pruebas KDS de idempotencia/IO y `clearKdsCache`** — cubierto por el motor de sync y
+  el journey; se reabre si aparece un fallo de campo.
+- **2026-11-26 · P3 `bootstrapTransactionalHttpApp` duplica `bootstrapHttpApp`** — duplicacion de arnes
+  sin impacto en producto.
+- **2026-11-26 · decision rechazada de conceder DML directo a `app_api`** — registro historico; prevalece
+  ADR-013 §13.

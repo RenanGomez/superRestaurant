@@ -1,30 +1,36 @@
 # Estado del loop
 
-Actualizado: 2026-11-26 (cierre de M3: pase visual real, journey E2E, almacén predeterminado y
-ledger crudo cerrado)
+Actualizado: 2026-11-26 (Ola 4 — deuda que muerde: verificadores, lecturas de compras, revisiones de M2)
 
-- **M1/M2:** cerrados. M2 con puertas humanas en `docs/agentic/m2-offline-signoff.md` (migraciones
-  remotas, dispositivo real, impresora, capturas).
-- **M3 inventario: ~100 %.** Dominio, contratos, SQL, API (insumos, almacenes, movimientos,
-  transferencias, saldos, recetas, compras, alertas/costeo), seis pestañas de `/app/inventario`,
-  **almacén predeterminado por sucursal (#125)**, **ledger crudo cerrado a `app_api` (#122)**,
-  **pase visual real 12/12 (#124)** y **journey E2E de inventario en verde (#123)**.
-- **Porcentaje M3 (fusionado / total del hito):** ~100 %. Queda deuda P3 documentada, no bloqueante.
-- **Puertas de esta ola:** `verify:inventory-schema:rollback` **90** migraciones desde cero `ok`;
-  `test:http:local` 9/9; shared-types 49/49; API y web typecheck/lint/test en 0;
-  `E2E_VISUAL=1` → **12/12** combinaciones con capturas en `docs/agentic/visual-verify-2026-11-26/`;
-  journey 13 **1 test verde (1.7 min)** contra el stack local.
-- **Migraciones remotas (dev):** aplicadas `20261126001200` y `20261126001300` con el protocolo
-  §19.6 (sonda rollback-only 7 y 27 sentencias, respaldo schema-only, dry-run exacto, postcheck con
-  `EXECUTE` correcto, segundo dry-run `upToDate`). `lastRemote=20261126001300`.
-  Informe: `docs/agentic/dev-migrations-2026-11-26.md`.
-- **Revisiones de la ola:** #122 APROBAR (SQL) + APROBAR (API tras el fix del P2); #124 APROBAR;
-  #125 APROBAR (SQL) + APROBAR (API/UI con dos P2 corregidos); #123 APROBAR tras corregir 2 P2 y 1 P3.
-- **Decisiones nuevas:** (1) el pase visual mide el hit area real de `::before/::after`; (2)
-  `isDefault` es obligatorio en el contrato del almacén (API y web se despliegan juntos); (3) los
-  worktrees de dsh viven en `.harness/worktrees` porque su sandbox no sale del repositorio; (4) el
-  `storageState` se renueva con `tools/agentic/local-servers/refresh-e2e-session.mjs`.
-- **Deuda:** `docs/agentic/debt.md` (P3 de auditor visual, UI de almacenes, `recipeVersionId` nulo en
-  movimientos, receta no despublicable y fixtura estable del journey).
-- **Siguiente ola:** `docs/plans/plan-2026-11-26-siguiente.md` §3 (deuda que muerde: verificadores
-  históricos, revisiones de M2, lecturas de compras con `catalog.read`, `deviceId`) y después M4.
+- **M1:** cerrado. **M2:** cerrado formalmente, pero **no declarable al 100 %**: las revisiones de la Ola 0
+  encontraron dos P1 de purga offline y un P2 de líder entre pestañas (ver deuda activa). Puertas humanas
+  (dispositivo real, impresora, capturas) siguen abiertas en `docs/agentic/m2-offline-signoff.md`.
+- **M3 inventario: 100 % del alcance fusionado.** Migración nueva `20261126001400` aplicada a dev con el
+  protocolo §19.6 (`docs/agentic/dev-migrations-2026-11-26b.md`); `lastRemote=20261126001400`.
+- **Ola 4:**
+  - `debt-historical-verifiers` **DONE** (#130): los tres verificadores históricos corren desde cero
+    (shared 62 previas, locked 63, capture 16 con base 27/5/36 → 35/5/41); fixtures pineados en
+    `supabase/tests/historical/` para que CI no los ejecute contra el esquema completo.
+  - `debt-compras-reads` **DONE** (#131): lecturas de proveedores y órdenes con `catalog.read` en servicio
+    y SQL (ocho roles; `kitchen`/`courier` siguen en `42501`), escrituras intactas. 91 migraciones desde
+    cero y `test:http:local` 9/9.
+  - Revisiones de M2 (**5/5 con veredicto**): `o0-rev-web-leader` **CAMBIOS** (P2: seguidor sin timeout;
+    el líder no tiene consumidor productivo), `o0-rev-web-purge` **CAMBIOS** (2 P1: `decideOfflinePurge`
+    sin llamador y `purgeReplica` rechazando `STORAGE_LOCKED`; P2: cursor del scope),
+    `o0-rev-mobile-banner` **APROBAR** (P2 de pruebas), `o0-rev-sync-p3` **APROBAR** (P2 de mapeo
+    `AUTH_REVOKED`), `o0-rev-visual` **CAMBIOS** (P2: el spec de KDS offline puede dar verde falso).
+  - Correcciones en PR: #132 (release conserva evidencia financiera rechazada), #133 (purga de scope con
+    `resync_required` y sin cursor) y #134 (identidad de dispositivo de inventario estable por perfil).
+  - `o0-wire` **DONE** como cableado de pruebas (#85); el cableado productivo del líder pasa a
+    `o0-leader-wire` y la purga de producción a `o0-purge-wire`.
+  - `debt-device-id` **DONE** (#134): `deviceId` por perfil de navegador, decisión documentada; validar
+    contra `app.sync_devices` queda como `o0-device-registry` (nivel A).
+  - `debt-p3-sweep` **DONE**: `debt.md` reescrito en Activa (dueño + siguiente acción) y Archivada (fecha
+    y motivo).
+- **Puertas de la ola:** shared/locked/capture verdes; `verify:inventory-schema:rollback` 91 migraciones
+  ok; `test:http:local` 9/9; web y API typecheck/lint/test en 0; CI verde en #130, #131 (y corriendo en
+  #132/#133).
+- **Puerta humana pendiente:** la prueba única del operador (D1–D7, T1–T4, seis pestañas de inventario)
+  sigue sin registrarse; ninguna fila de «Día operable» pasa a DONE.
+- **Siguiente ola:** `o0-purge-wire` (P1) y `o0-leader-wire` (P2) para poder declarar M2 al 100 %;
+  después el arranque de M4 (`m4-metrics-catalog`, `m4-adr-014-exports`).
