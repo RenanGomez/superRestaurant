@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DEFAULT_INVENTORY_TAB,
   INVENTORY_TABS,
+  ensureInventoryDeviceId,
   ensureInventoryIdempotencyKey,
   filterInventoryItems,
   formatInventoryMovementQuantity,
@@ -27,6 +28,7 @@ import {
   validateRecipeLineDrafts,
   validateSupplierDraft,
   warehouseDefaultLabel,
+  type InventoryDeviceStore,
 } from "./inventory-ui.js";
 
 test("inventory tabs are stable and parse untrusted values", () => {
@@ -325,4 +327,89 @@ test("purchase order statuses carry an operator-facing Spanish label", () => {
   assert.equal(purchaseOrderStatusLabel("received"), "Recibida");
   assert.equal(purchaseOrderStatusLabel("cancelled"), "Cancelada");
   assert.equal(purchaseOrderStatusLabel("unknown"), "Orden");
+});
+
+interface MemoryDeviceStore {
+  readonly store: InventoryDeviceStore;
+  reads(): number;
+  writes(): number;
+  value(): string | null;
+}
+
+function memoryDeviceStore(initial: string | null = null): MemoryDeviceStore {
+  let value = initial;
+  let reads = 0;
+  let writes = 0;
+  return {
+    reads: () => reads,
+    store: {
+      getItem: () => {
+        reads += 1;
+        return value;
+      },
+      setItem: (_key, next) => {
+        writes += 1;
+        value = next;
+      },
+    },
+    value: () => value,
+    writes: () => writes,
+  };
+}
+
+test("inventory device id reuses a stored canonical uuid", () => {
+  const stored = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const memory = memoryDeviceStore(stored);
+  let created = 0;
+  const id = ensureInventoryDeviceId(memory.store, () => {
+    created += 1;
+    return "11111111-1111-4111-8111-111111111111";
+  });
+  assert.equal(id, stored);
+  assert.equal(created, 0);
+  assert.equal(memory.reads(), 1);
+  assert.equal(memory.writes(), 0);
+});
+
+test("inventory device id replaces a corrupt stored value", () => {
+  const generated = "22222222-2222-4222-8222-222222222222";
+  const corrupt = memoryDeviceStore("no-es-uuid");
+  assert.equal(ensureInventoryDeviceId(corrupt.store, () => generated), generated);
+  assert.equal(corrupt.value(), generated);
+  assert.equal(corrupt.writes(), 1);
+
+  const uppercase = memoryDeviceStore("0F8FAD5B-D9CB-469F-A165-70867728950E");
+  assert.equal(ensureInventoryDeviceId(uppercase.store, () => generated), generated);
+  assert.equal(uppercase.value(), generated);
+});
+
+test("inventory device id survives a blocked store", () => {
+  const blocked: InventoryDeviceStore = {
+    getItem: () => { throw new Error("blocked"); },
+    setItem: () => { throw new Error("blocked"); },
+  };
+  const generated = "33333333-3333-4333-8333-333333333333";
+  assert.equal(ensureInventoryDeviceId(blocked, () => generated), generated);
+  assert.equal(ensureInventoryDeviceId(undefined, () => generated), generated);
+});
+
+test("inventory device id is stable across calls with the same store", () => {
+  const memory = memoryDeviceStore();
+  let created = 0;
+  const create = (): string => {
+    created += 1;
+    return "44444444-4444-4444-8444-444444444444";
+  };
+  const first = ensureInventoryDeviceId(memory.store, create);
+  const second = ensureInventoryDeviceId(memory.store, create);
+  assert.equal(first, second);
+  assert.equal(created, 1);
+  assert.equal(memory.writes(), 1);
+});
+
+test("inventory device id rejects a generator that returns no uuid", () => {
+  assert.throws(
+    () => ensureInventoryDeviceId(memoryDeviceStore().store, () => "abc"),
+    /INVENTORY_DEVICE_ID_REJECTED/u,
+  );
 });

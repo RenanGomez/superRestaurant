@@ -408,6 +408,41 @@ export function validatePurchaseOrderDraft(draft: PurchaseOrderDraft): PurchaseO
   return { currency, lines: Object.freeze(lines), ok: true };
 }
 
+/** Minimal key-value storage the device-id helper needs; a browser `localStorage` matches it. */
+export interface InventoryDeviceStore {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/** Browser key that keeps the inventory device id stable per profile, not per tab. */
+export const INVENTORY_DEVICE_ID_KEY = "super-restaurant.inventory.deviceId";
+
+const CANONICAL_DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+/**
+ * Resolves the device id sent with inventory writes. It is an audit trace, never an
+ * authorization: the server identifies the actor from the session. Reuses a stored canonical
+ * UUID, replaces a corrupt value and survives a blocked store (a throwing `getItem`/`setItem`
+ * still returns the id generated for this mount, so mounting never fails).
+ */
+export function ensureInventoryDeviceId(store: InventoryDeviceStore | undefined, create: () => string): string {
+  let stored: string | null | undefined;
+  try {
+    stored = store?.getItem(INVENTORY_DEVICE_ID_KEY);
+  } catch {
+    stored = undefined;
+  }
+  if (typeof stored === "string" && CANONICAL_DEVICE_ID.test(stored)) return stored;
+  const generated = create();
+  if (!CANONICAL_DEVICE_ID.test(generated)) throw new Error("INVENTORY_DEVICE_ID_REJECTED");
+  try {
+    store?.setItem(INVENTORY_DEVICE_ID_KEY, generated);
+  } catch {
+    // A blocked store still keeps the generated id for this mount.
+  }
+  return generated;
+}
+
 /** Operator-facing name for every purchase order status. Unknown values fall back to a neutral word. */
 export function purchaseOrderStatusLabel(status: string): string {
   switch (status) {
