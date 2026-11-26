@@ -19,8 +19,10 @@ Actualizado: 2026-11-26 (Ola 4 — deuda que muerde: verificadores, lecturas de 
     sin llamador y `purgeReplica` rechazando `STORAGE_LOCKED`; P2: cursor del scope),
     `o0-rev-mobile-banner` **APROBAR** (P2 de pruebas), `o0-rev-sync-p3` **APROBAR** (P2 de mapeo
     `AUTH_REVOKED`), `o0-rev-visual` **CAMBIOS** (P2: el spec de KDS offline puede dar verde falso).
-  - Correcciones en PR: #132 (release conserva evidencia financiera rechazada), #133 (purga de scope con
-    `resync_required` y sin cursor) y #134 (identidad de dispositivo de inventario estable por perfil).
+  - Correcciones fusionadas: #132 (release conserva evidencia financiera rechazada), #133 (purga de
+    scope con `resync_required` y sin cursor) y #134 (identidad de dispositivo de inventario estable
+    por perfil), revisadas por dsh (APROBAR en #132 y #133; #134 con un P2 de documentación corregido
+    en el mismo PR).
   - `o0-wire` **DONE** como cableado de pruebas (#85); el cableado productivo del líder pasa a
     `o0-leader-wire` y la purga de producción a `o0-purge-wire`.
   - `debt-device-id` **DONE** (#134): `deviceId` por perfil de navegador, decisión documentada; validar
