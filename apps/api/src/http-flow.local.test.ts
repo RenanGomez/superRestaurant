@@ -8,6 +8,7 @@ import { daySummaryFlow } from "./operations/http-flow-day-summary.js";
 import { deliveryFlow } from "./operations/http-flow-delivery.js";
 import { halvesFlow } from "./operations/http-flow-halves.js";
 import { halvesProductLevelFlow } from "./operations/http-flow-halves-product-level.js";
+import { inventoryFlow } from "./operations/http-flow-inventory.js";
 import { bootstrapHttpApp } from "./operations/http-test-app.js";
 import { HTTP_TEST_ACTORS, provisionHttpFixtures, type HttpTestActorName } from "./operations/http-test-fixtures.js";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./operations/local-postgres.js";
@@ -189,3 +190,5 @@ test("http flow: card terminal plus transfer split tender and transfer refused o
 test("http flow: whole-order cancellation, refund obligation, active delivery guard and cancelled tray", async () => { await cancellationFlow(); });
 
 test("http flow: branch day summary equals captured payments, role gates and empty day", async () => { await daySummaryFlow(); });
+
+test("http flow: confirmed sale consumes recipe stock, line cancellation restores it, replay is idempotent and a recipe-less line is inert", async () => { await inventoryFlow(); });

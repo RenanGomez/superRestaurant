@@ -127,6 +127,58 @@ test("Nest wiring keeps health public and all other routes authenticated by defa
       code: "AUTHENTICATION_REQUIRED",
     });
 
+    const inventoryItemsUnauthenticated = await fetch(`${url}/api/v1/inventory/items?restaurantId=${restaurantId}`);
+    assert.equal(inventoryItemsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryItemsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryWarehousesUnauthenticated = await fetch(`${url}/api/v1/inventory/warehouses?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryWarehousesUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryWarehousesUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryMovementsUnauthenticated = await fetch(`${url}/api/v1/inventory/movements?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryMovementsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryMovementsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryBalancesUnauthenticated = await fetch(`${url}/api/v1/inventory/balances?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryBalancesUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryBalancesUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryRecipesUnauthenticated = await fetch(`${url}/api/v1/inventory/recipes?restaurantId=${restaurantId}&productId=${branchId}`);
+    assert.equal(inventoryRecipesUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryRecipesUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryRecipeUnauthenticated = await fetch(`${url}/api/v1/inventory/recipes/${branchId}?restaurantId=${restaurantId}`);
+    assert.equal(inventoryRecipeUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryRecipeUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventorySuppliersUnauthenticated = await fetch(`${url}/api/v1/inventory/suppliers?restaurantId=${restaurantId}`);
+    assert.equal(inventorySuppliersUnauthenticated.status, 401);
+    assert.deepEqual(await inventorySuppliersUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryPurchaseOrdersUnauthenticated = await fetch(`${url}/api/v1/inventory/purchase-orders?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryPurchaseOrdersUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryPurchaseOrdersUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryPurchaseOrderUnauthenticated = await fetch(`${url}/api/v1/inventory/purchase-orders/${branchId}`);
+    assert.equal(inventoryPurchaseOrderUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryPurchaseOrderUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryAlertsUnauthenticated = await fetch(`${url}/api/v1/inventory/alerts?restaurantId=${restaurantId}&branchId=${branchId}`);
+    assert.equal(inventoryAlertsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryAlertsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryCostsUnauthenticated = await fetch(`${url}/api/v1/inventory/costs?restaurantId=${restaurantId}&branchId=${branchId}&warehouseId=${branchId}&itemId=${branchId}`);
+    assert.equal(inventoryCostsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryCostsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryProductCostsUnauthenticated = await fetch(`${url}/api/v1/inventory/product-costs?restaurantId=${restaurantId}&productId=${branchId}`);
+    assert.equal(inventoryProductCostsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryProductCostsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
+    const inventoryMarginsUnauthenticated = await fetch(`${url}/api/v1/inventory/margins?restaurantId=${restaurantId}&branchId=${branchId}&productId=${branchId}`);
+    assert.equal(inventoryMarginsUnauthenticated.status, 401);
+    assert.deepEqual(await inventoryMarginsUnauthenticated.json(), { code: "AUTHENTICATION_REQUIRED" });
+
     const syncUnauthenticated = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.equal(syncUnauthenticated.status, 401);
     const syncInvalid = await fetch(`${url}/api/v1/sync/push`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer valid-smoke-access-token" }, body: "{}" });

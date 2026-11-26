@@ -1,56 +1,64 @@
-# Migraciones remotas aplicadas — 2026-11-25 (nivel A, datos)
+# Migraciones remotas aplicadas — dev — 2026-11-25/26 (nivel A, datos)
 
 - **Proyecto destino:** `zwbyiefqeujstyzysydn` (Supabase de desarrollo; no existe entorno de staging provisionado, ver `docs/runbooks/deploy.md` §9). Autorización explícita de Emmanuel para aplicar migraciones.
-- **Base:** `origin/main` en `03dd2204`. La copia de trabajo principal estaba en uso por otra sesión (cambiaba de rama durante la sesión), así que el trabajo se ejecutó desde un worktree aislado en `C:\Users\Emmanuel G\AppData\Local\Temp\opencode\sr-mig-main` con el mismo SHA.
+- **Base:** dos lotes sobre `origin/main`: `03dd2204` (13 migraciones) y `7b5ff570` (8 migraciones de la ola M3). El checkout principal estaba en uso por otra sesión, así que todo se ejecutó desde el worktree aislado `C:\Users\Emmanuel G\AppData\Local\Temp\opencode\sr-mig-main`.
 - **Herramientas:** Node 24.19.0, pnpm 11.19.0, Supabase CLI 2.118.0, PostgreSQL 17.6 portable.
 - **Sin secretos en el informe:** la cadena de conexión, la CA y `SYNC_CURSOR_SECRET` se usaron por nombre; no se imprimieron valores.
 
 ## 1. Estado real antes de tocar nada (preflight READ_ONLY)
 
-- `lastRemote`: `20261106000100`.
+- `lastRemote` inicial: `20261106000100` (no la lista corta del plan).
 - 5 migraciones ADR históricas existen solo en el remoto (`20260825000100`…`20260829000100`), esperado.
-- `localMissingInRemote` (14):
-  - `20260908000100` (excluida del apply: sus objetos ya existen en el remoto; ver desviaciones).
-  - `20261120000100`, `20261120000200`, `20261121000100`, `20261122000100`.
-  - `20261123000100`…`20261123000600`.
-  - `20261126000100`, `20261126000200`, `20261126000300`.
-- Catálogo remoto inicial: 50 tablas aseguradas, 5 políticas, 100 funciones `SECURITY DEFINER`.
+- Pendientes reales: **21** en dos tandas, según avanzaba `main`:
+  - lote 1: `20261120000100`, `20261120000200`, `20261121000100`, `20261122000100`, `20261123000100`…`20261123000600`, `20261126000100`…`20261126000300`;
+  - lote 2 (fusionado después en M3): `20261126000400`…`20261126001100`.
+- `20260908000100` aparece como pendiente por historial, pero se excluye: sus objetos ya existen en el remoto (ver desviaciones).
+- Catálogo inicial: 50 tablas aseguradas, 5 políticas, 100 funciones `SECURITY DEFINER`.
 
-La lista real era mayor que la del plan (el remoto estaba en `20261106000100`): además de las 5 de sync, faltaban pizza v2, sus fixes y las 3 de inventario.
+## 2. Puertas ejecutadas antes de cada apply
 
-## 2. Puertas ejecutadas antes del apply
+### Lote 1 (13 migraciones)
 
-1. **Probe local completo:** `verify:inventory-schema:rollback` con `LOCAL_POSTGRES_BIN` → `{"stage":"inventory_schema_rollback","status":"ok","migrationsApplied":80}` y `{"stage":"local_cleanup","status":"ok","stopped":true}`.
-2. **Sonda rollback-only por candidata** (`probe:migration:rollback`), siempre `BEGIN`/`ROLLBACK`:
-   - Pasaron aisladas: `20261120000100` (36 sentencias), `20261120000200` (5), `20261121000100` (97), `20261123000100` (3), `20261123000200` (4), `20261123000300` (44), `20261126000100` (27).
-   - Fallaron por dependencia hacia adelante, no por defecto propio: `20261122000100` (parchea la función de `20261120000100`), `20261123000400` y `20261123000600` (necesitan `app.sync_devices`/`app.sync_changelog` de `20261123000300`), `20261123000500` (necesita `app.capture_delivery_manual_fees` de `20261121000100`), `20261126000200`/`20261126000300` (necesitan `app.inventory_items` de `20261126000100`).
-3. **Sonda encadenada rollback-only** contra el remoto real: las 13 candidatas, en orden, dentro de una sola transacción → `{"migrationsAppliedInTxn":13,"rollback":"ok","status":"ok"}`.
-4. **Respaldo lógico previo:** `pg_dump` custom a `%TEMP%\opencode\dev-pre-20261125.dump`, 1.6 MB, TOC con 1244 entradas verificado con `pg_restore --list`.
-5. **Dry-run exacto:** anunció únicamente las 13 candidatas (sin seeds ni roles).
+1. **Probe local completo:** `verify:inventory-schema:rollback` → `status ok`, 80 migraciones desde cero, `cleanup stopped=true`.
+2. **Sonda rollback-only por candidata:** pasaron las autocontenidas; fallaron por dependencia hacia adelante `20261122000100` (parchea la función de `20261120000100`), `20261123000400`/`000600` (necesitan `20261123000300`), `20261123000500` (necesita `20261121000100`) y `20261126000200`/`000300` (necesitan `20261126000100`).
+3. **Sonda encadenada rollback-only** de las 13 contra el remoto real en una sola transacción → `{"migrationsAppliedInTxn":13,"rollback":"ok","status":"ok"}`.
+4. **Respaldo lógico:** `dev-pre-20261125.dump`, 1244 entradas TOC verificadas.
+5. **Dry-run exacto:** solo las 13 candidatas.
+6. **Apply único:** `2026-11-25T15:48:39Z` → `15:49:16Z` (37 s).
 
-## 3. Apply
+### Lote 2 (8 migraciones)
 
-- Ventana: `2026-11-25T15:48:39Z` → `2026-11-25T15:49:16Z` (37 s), un solo `supabase db push --skip-vault`, sin reintentos.
-- Aplicadas, en orden: `20261120000100`, `20261120000200`, `20261121000100`, `20261122000100`, `20261123000100`, `20261123000200`, `20261123000300`, `20261123000400`, `20261123000500`, `20261123000600`, `20261126000100`, `20261126000200`, `20261126000300`.
+1. **Probe local completo (main nuevo):** `verify:inventory-schema:rollback` → `status ok`, **88** migraciones desde cero, `cleanup stopped=true`.
+2. **Sonda encadenada rollback-only** de las 8 contra el remoto (ya en `000300`) → `{"migrationsAppliedInTxn":8,"rollback":"ok","status":"ok"}`.
+3. **Respaldo lógico:** `dev-pre-20261125-batch2.dump`, 1479 entradas TOC verificadas.
+4. **Dry-run exacto:** solo las 8 candidatas.
+5. **Apply único:** `2026-11-26T00:17:24Z` → `00:17:47Z` (23 s).
 
-## 4. Postcheck (READ_ONLY)
+## 3. Migraciones aplicadas
 
-- `lastRemote`: `20261126000300`; `missingVersions: []`; `duplicateVersions: []`; `upToDate: true`.
-- Catálogo: 65 tablas aseguradas (antes 50), 11 políticas (antes 5), 128 funciones `SECURITY DEFINER` (antes 100).
-- Privilegios `EXECUTE` en `app_private` verificados: `inventory_record_movement`, `publish_inventory_recipe`, `sync_device_state`, `sync_write_allowed`, `replace_capture_selection_plan`, `confirm_capture_draft_v3`, `save_menu_catalog` → `app_api: true`, `authenticated: false`, `owner: true`.
-- Segundo `db push --dry-run`: `{"upToDate":true,"migrations":[]}`.
-- Auditoría RLS de las 15 tablas nuevas: ninguna tabla de `app` quedó con RLS deshabilitado. Las tablas de sync/urbanización quedan con 0 políticas y sin privilegios directos (escritura solo por funciones `SECURITY DEFINER` de `app_api`); las de inventario tienen 1 política de lectura por membresía/sucursal y `SELECT` para `authenticated`, sin acceso directo de `app_api` (lectura/escritura por funciones).
+- Lote 1: pizza v2 y probe, zonas/urbanización, fix de confirmación pizza v2, sync (`20261123000100`…`000600`) e inventario base (`20261126000100`…`000300`).
+- Lote 2: compras (`000400`), consumo por venta (`000500`), funciones API (`000600`), cancelación de línea (`000700`), movimientos (`000800`), recetas API (`000900`), compras API (`001000`), costeo (`001100`).
+
+## 4. Postcheck final (READ_ONLY)
+
+- `lastRemote`: `20261126001100`; `missingVersions: []`; `duplicateVersions: []`; `upToDate: true`.
+- Catálogo: **69** tablas aseguradas (antes 50), **15** políticas (antes 5), **159** funciones `SECURITY DEFINER` (antes 100).
+- `EXECUTE` de `app_private` comprobado para `app_api` (y denegado a `authenticated`) en: `inventory_consume_order`, `inventory_reverse_order_item`, `cancel_order_with_inventory`, `confirm_capture_draft_v3_with_inventory`, `inventory_average_cost`, `list_inventory_items`, `inventory_receive_purchase_order`, `inventory_transfer`, `sync_device_state`, `replace_capture_selection_plan`.
+- Segundo dry-run tras el lote 2: `{"upToDate":true,"migrations":[]}`.
+- Auditoría RLS: ninguna tabla de `app` sin RLS. Tablas nuevas de sync/urbanización sin privilegios directos (solo funciones `SECURITY DEFINER`); inventario, compras y consumos con 1 política de lectura por membresía/sucursal y `SELECT` para `authenticated`, sin DML directo de `app_api`.
 
 ## 5. Desviaciones y notas
 
-- **No hay staging provisionado:** dev se usó como destino único; queda registrado como brecha de `docs/runbooks/deploy.md` §9.
-- **`20260908000100`:** el historial remoto no tiene su fila, pero sus objetos (`app.system_admins`, etc.) ya existen. La sonda falló con `42P07 relation "system_admins" already exists`; se excluyó del apply (como indica `docs/runbooks/migration-apply.md`). No se tocó `supabase_migrations.schema_migrations` a mano. Queda pendiente decidir si se reconcilia con una migración idempotente nueva.
-- **`20261120000200`:** el archivo no tiene envoltura `BEGIN/COMMIT`, por lo que la sonda genérica no lo acepta. Se sondeó una copia envuelta (solo para el ensayo); el apply usó el archivo real.
-- **Copia principal en uso:** otra sesión cambió de rama en el checkout principal durante la sesión (de `harness/m3-inventory-batch` a `main` y a `harness/m3-api-items`). Por eso el apply se ejecutó desde un worktree aislado y este informe se entrega en la rama `docs/dev-migrations-20261125`, no directamente en `main`.
-- El respaldo y el staging temporal viven fuera del repositorio; el staging temporal se eliminó tras el segundo dry-run.
+- **No hay staging provisionado:** dev fue el destino único (brecha de `docs/runbooks/deploy.md` §9).
+- **`20260908000100`:** el historial remoto no tiene su fila, pero sus objetos (`app.system_admins`, etc.) ya existen; la sonda falló con `42P07 relation "system_admins" already exists`. Se excluyó del apply y **no** se tocó `supabase_migrations.schema_migrations` a mano. Requiere una migración idempotente nueva si se quiere reconciliar.
+- **`20261120000200`:** sin envoltura `BEGIN/COMMIT`; se sondeó una copia envuelta y se aplicó el archivo real.
+- **`main` avanzó entre lotes:** la ola M3 fusionó 8 migraciones nuevas después del primer apply; el segundo lote usó el protocolo completo otra vez y se revalidó el probe local con 88 migraciones.
+- **Checkout principal en uso:** otra sesión cambió de rama durante el trabajo; el apply y los documentos se hicieron desde el worktree aislado. El informe va en la rama `docs/dev-migrations-20261125`.
+- El respaldo y el staging temporal viven fuera del repositorio; los staging temporales se eliminaron tras cada segundo dry-run.
 
 ## 6. Siguiente acción mínima
 
-- Reconstruir/reiniciar `apps/api` local con el esquema aplicado y comprobar `/api/v1/health`.
+- Mergear `docs/dev-migrations-20261125`.
+- Reconstruir y reiniciar `apps/api` local con el esquema aplicado y comprobar `/api/v1/health`.
 - Configurar `SYNC_CURSOR_SECRET` (≥32) en el runtime del API antes de probar pull/push de sync; su valor no se registra.
-- Verificar en navegador real las pantallas que dependen de sync e inventario cuando sus PRs lleguen a `main`.
+- Verificar en navegador real `/app/inventario` cuando el corte llegue a un entorno desplegado.

@@ -1417,13 +1417,14 @@
                       "deps":  [
                                    "m3-sql-recipes"
                                ],
-                      "status":  "review",
+                      "status":  "done",
                       "id":  "m3-sql-purchasing",
                       "title":  "Proveedores, ordenes de compra y recepcion",
                       "level":  "A",
                       "paths":  [
                                     "supabase/migrations/20261126000400_inventory_purchasing.sql"
-                                ]
+                                ],
+                      "note":  "PR #91 fusionado: idempotencia por sucursal+clave, auditoria de recepcion y pruebas de dinero; revision doble dsh."
                   },
                   {
                       "attempts":  0,
@@ -1438,13 +1439,14 @@
                                    "m3-sql-purchasing",
                                    "m3-map-sale-hooks"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-sql-sale-consumption",
                       "title":  "Consumo por venta y reverso idempotentes",
                       "level":  "A",
                       "paths":  [
                                     "supabase/migrations/20261126000500_inventory_sale_consumption.sql"
-                                ]
+                                ],
+                      "note":  "Migracion 00500 + 00700 y cableado API en la rama m3-sql-sale-consumption: is_default por sucursal, eventos comando+pasos, reverso compensado, cancelacion de linea. Verificador 84 migraciones verde y test:http:local 7/7. Falta el E2E applied del wrapper de confirmacion (m3-int-sale-to-stock)."
                   },
                   {
                       "attempts":  0,
@@ -1478,13 +1480,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "review",
+                      "status":  "done",
                       "id":  "m3-api-items",
                       "title":  "API de insumos y almacenes",
                       "level":  "B",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #90 fusionado: 8 funciones app_private SECURITY DEFINER, mapeo de errores 23503/23514/42501; revision doble dsh."
                   },
                   {
                       "attempts":  0,
@@ -1498,13 +1501,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-movements",
                       "title":  "API de movimientos manuales con supervisor y motivo",
                       "level":  "A",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #99 fusionado: transferencia atomica con lock, ajuste/merma/conteo, listados de movimientos/saldos; revision A con P2 corregidos."
                   },
                   {
                       "attempts":  0,
@@ -1518,13 +1522,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-recipes",
                       "title":  "API de recetas",
                       "level":  "B",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #100: publicar/listar/leer recetas versionadas; P2 de doble transaccion corregido devolviendo la version publicada."
                   },
                   {
                       "attempts":  0,
@@ -1558,13 +1563,14 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-alerts-costing",
                       "title":  "API de alertas, costo promedio y margen",
                       "level":  "B",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #106: alertas por minimo, costo medio entero con resto, coste de receta y margen estimado; PG 88 migraciones y revision B APROBAR."
                   },
                   {
                       "attempts":  0,
@@ -1578,13 +1584,14 @@
                       "deps":  [
                                    "m3-api-wire"
                                ],
-                      "status":  "todo",
+                      "status":  "in_progress",
                       "id":  "m3-web-inventario",
                       "title":  "UI web de inventario (insumos, movimientos, conteo, recetas, compras, alertas)",
                       "level":  "C",
                       "paths":  [
                                     "apps/web/src/app/app/inventario"
-                                ]
+                                ],
+                      "note":  "PR #99 Insumos/Almacenes, #108 Movimientos (ajuste/merma/transferencia) y #109 Recetas (publicar versiones). Faltan Compras, Alertas y la verificacion visual real (desktop y 390x844)."
                   },
                   {
                       "attempts":  0,
@@ -1598,13 +1605,14 @@
                       "deps":  [
                                    "m3-sql-sale-consumption"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-int-sale-to-stock",
                       "title":  "Integracion venta-cancelacion contra existencias",
                       "level":  "A",
                       "paths":  [
                                     "apps/api/src/inventory"
-                                ]
+                                ],
+                      "note":  "PR #104: flujo http_flow_inventory (8/8) con almacen default, receta, consumo 240 g, replay sin duplicar, reverso y linea sin receta inerte; revision A APROBAR."
                   },
                   {
                       "attempts":  0,

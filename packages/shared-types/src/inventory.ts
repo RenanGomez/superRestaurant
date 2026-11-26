@@ -81,6 +81,15 @@ export interface RecipeVersionV1 {
   readonly lines: readonly RecipeLineV1[];
 }
 
+/** UI command: the server assigns `recipeId` and `version` when it publishes the snapshot. */
+export interface PublishRecipeCommandV1 {
+  readonly restaurantId: RestaurantId;
+  readonly productId: string;
+  readonly modifierId: string | null;
+  readonly notes: string | null;
+  readonly lines: readonly RecipeLineV1[];
+}
+
 /** UI command: the server assigns `id` and `occurredAt`. */
 export interface InventoryMovementRequestV1 {
   readonly restaurantId: RestaurantId;
@@ -94,7 +103,10 @@ export interface InventoryMovementRequestV1 {
   readonly reason: string | null;
   readonly idempotencyKey: string;
   readonly compensatesMovementId: string | null;
+  /** Server-owned: the request only ever sends `null`; the ledger assigns the pair id. */
   readonly transferPairId: string | null;
+  /** Counterpart warehouse: a UUID for `transfer_out`/`transfer_in`, `null` otherwise. */
+  readonly toWarehouseId: string | null;
   readonly unitCostMinor: number | null;
   readonly currency: string | null;
 }
@@ -125,6 +137,7 @@ const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,128}$/u;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 const CONTROL_CHAR_PATTERN = /[\p{Cc}\p{Cf}]/u;
 const MAX_RECIPE_LINES = 500;
+const MAX_RECIPE_COMMAND_LINES = 200;
 const MAX_PURCHASE_ORDER_LINES = 1_000;
 
 type PlainRecord = Readonly<Record<string, unknown>>;
@@ -238,6 +251,11 @@ function hasValidTransferPair(kind: InventoryMovementKindV1, transferPairId: unk
   return transferPairId === null || isInventoryId(transferPairId);
 }
 
+function hasValidTransferTarget(kind: InventoryMovementKindV1, toWarehouseId: unknown): boolean {
+  if (isTransferKind(kind)) return isInventoryId(toWarehouseId);
+  return toWarehouseId === null;
+}
+
 function exactRecord(value: unknown, keys: readonly string[]): PlainRecord | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   try {
@@ -309,7 +327,7 @@ export function parseInventoryItemV1(value: unknown): InventoryItemV1 | undefine
     !isInventoryId(id)
     || !isInventoryId(restaurantId)
     || !isNullableText(sku, 100)
-    || !isBoundedText(name, 200)
+    || !isBoundedText(name, 160)
     || !isInventoryUnit(unitCode)
     || !isPositiveInt(purchaseUnitFactor)
     || !isNonNegativeInt(minQuantity)
@@ -344,7 +362,7 @@ export function parseInventoryWarehouseV1(value: unknown): InventoryWarehouseV1 
     !isInventoryId(id)
     || !isInventoryId(restaurantId)
     || !isInventoryId(branchId)
-    || !isBoundedText(name, 200)
+    || !isBoundedText(name, 160)
     || typeof active !== "boolean"
   ) {
     return undefined;
@@ -528,6 +546,65 @@ export function parseRecipeVersionV1(value: unknown): RecipeVersionV1 | undefine
   });
 }
 
+export function parsePublishRecipeCommandV1(value: unknown): PublishRecipeCommandV1 | undefined {
+  let record: PlainRecord;
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    for (const key of keys) {
+      if (
+        typeof key !== "string"
+        || !["restaurantId", "productId", "modifierId", "notes", "lines"].includes(key)
+      ) {
+        return undefined;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) return undefined;
+    }
+    record = value as PlainRecord;
+  } catch {
+    return undefined;
+  }
+
+  const restaurantId = ownValue(record, "restaurantId");
+  const productId = ownValue(record, "productId");
+  const modifierId = Object.hasOwn(record, "modifierId") ? ownValue(record, "modifierId") : null;
+  const notes = Object.hasOwn(record, "notes") ? ownValue(record, "notes") : null;
+  const rawLines = exactArray(ownValue(record, "lines"), MAX_RECIPE_COMMAND_LINES);
+
+  if (
+    !isInventoryId(restaurantId)
+    || !isInventoryId(productId)
+    || !(modifierId === null || isInventoryId(modifierId))
+    || !isNullableText(notes, 500)
+    || rawLines === undefined
+    || rawLines.length === 0
+  ) {
+    return undefined;
+  }
+
+  const lines: RecipeLineV1[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of rawLines) {
+    const line = parseRecipeLineV1(rawLine);
+    if (line === undefined) return undefined;
+    const lineKey = `${line.itemId}\u0000${line.unitCode}`;
+    if (seen.has(lineKey)) return undefined;
+    seen.add(lineKey);
+    lines.push(line);
+  }
+
+  return Object.freeze({
+    restaurantId: restaurantId as RestaurantId,
+    productId,
+    modifierId: modifierId as string | null,
+    notes: notes as string | null,
+    lines: Object.freeze(lines),
+  });
+}
+
 export function parseInventoryMovementRequestV1(value: unknown): InventoryMovementRequestV1 | undefined {
   const record = exactRecord(value, [
     "restaurantId",
@@ -542,6 +619,7 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
     "idempotencyKey",
     "compensatesMovementId",
     "transferPairId",
+    "toWarehouseId",
     "unitCostMinor",
     "currency",
   ]);
@@ -559,6 +637,7 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
   const idempotencyKey = ownValue(record, "idempotencyKey");
   const compensatesMovementId = ownValue(record, "compensatesMovementId");
   const transferPairId = ownValue(record, "transferPairId");
+  const toWarehouseId = ownValue(record, "toWarehouseId");
   const unitCostMinor = ownValue(record, "unitCostMinor");
   const currency = ownValue(record, "currency");
 
@@ -576,7 +655,8 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
     || !hasValidReason(kind, reason)
     || !isIdempotencyKey(idempotencyKey)
     || !hasValidCompensation(kind, compensatesMovementId)
-    || !hasValidTransferPair(kind, transferPairId)
+    || transferPairId !== null
+    || !hasValidTransferTarget(kind, toWarehouseId)
     || !isMoneyPair(unitCostMinor, currency)
   ) {
     return undefined;
@@ -594,7 +674,8 @@ export function parseInventoryMovementRequestV1(value: unknown): InventoryMoveme
     reason,
     idempotencyKey,
     compensatesMovementId: compensatesMovementId as string | null,
-    transferPairId: transferPairId as string | null,
+    transferPairId: null,
+    toWarehouseId: toWarehouseId as string | null,
     unitCostMinor: unitCostMinor as number | null,
     currency: currency as string | null,
   });

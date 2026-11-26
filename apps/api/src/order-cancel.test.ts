@@ -223,9 +223,16 @@ test("PostgreSQL adapter binds app_private.cancel_order and decodes the real { r
   const adapter = new PostgresOrderPersistenceAdapter(database);
   const saved = await adapter.cancelWholeOrder(principal.actorId, command, []);
   assert.equal(saved.status, "saved");
-  assert.match(calls[0]!.sql, /app_private\.cancel_order\(\$1::uuid, \$2::jsonb, \$3::jsonb\)/u);
+  assert.match(calls[0]!.sql, /app_private\.cancel_order_with_inventory\(\$1::uuid, \$2::jsonb, \$3::jsonb\)/u);
   assert.equal(calls[0]!.parameters.length, 3);
   assert.equal(JSON.parse(calls[0]!.parameters[1] as string).reason, "Pedido duplicado");
+  next = {
+    inventory: [{ movements: 1, status: "recorded" }],
+    kdsEvents: [kds(sentItemId)], order: encodeOrderRecord(final), refundObligation: obligation, schemaVersion: 1, scope,
+    status: "saved", version: 7,
+  };
+  const withInventory = await adapter.cancelWholeOrder(principal.actorId, command, []);
+  assert.equal(withInventory.status, "saved");
   for (const status of ["conflict", "forbidden", "delivery_active"] as const) {
     next = { status };
     assert.deepEqual(await adapter.cancelWholeOrder(principal.actorId, command, []), { status });

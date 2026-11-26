@@ -8,6 +8,7 @@ import {
   parseInventoryMovementRequestV1,
   parseInventoryMovementV1,
   parseInventoryWarehouseV1,
+  parsePublishRecipeCommandV1,
   parsePurchaseOrderV1,
   parseRecipeVersionV1,
 } from "./index.js";
@@ -102,7 +103,7 @@ function validMovementRequest(overrides: Record<string, unknown> = {}): Record<s
   delete request.occurredAt;
   delete request.recipeVersionId;
   delete request.roundingRemainder;
-  return { ...request, ...overrides };
+  return { ...request, toWarehouseId: null, ...overrides };
 }
 
 function validPurchaseOrder(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -137,12 +138,22 @@ test("parseInventoryItemV1 accepts a valid item", () => {
   assert.ok(parseInventoryItemV1(validItem()));
 });
 
+test("parseInventoryItemV1 enforces the database name length of 160 characters", () => {
+  assert.ok(parseInventoryItemV1(validItem({ name: "a".repeat(160) })));
+  assert.equal(parseInventoryItemV1(validItem({ name: "a".repeat(161) })), undefined);
+});
+
 test("parseInventoryItemV1 rejects an extra key", () => {
   assert.equal(parseInventoryItemV1(validItem({ extra: true })), undefined);
 });
 
 test("parseInventoryWarehouseV1 accepts a valid warehouse", () => {
   assert.ok(parseInventoryWarehouseV1(validWarehouse()));
+});
+
+test("parseInventoryWarehouseV1 enforces the database name length of 160 characters", () => {
+  assert.ok(parseInventoryWarehouseV1(validWarehouse({ name: "a".repeat(160) })));
+  assert.equal(parseInventoryWarehouseV1(validWarehouse({ name: "a".repeat(161) })), undefined);
 });
 
 test("parseInventoryWarehouseV1 rejects a missing key", () => {
@@ -189,6 +200,63 @@ test("parseRecipeVersionV1 rejects an unknown line unit", () => {
   );
 });
 
+function validPublishCommand(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    restaurantId: RESTAURANT,
+    productId: PRODUCT,
+    modifierId: null,
+    notes: null,
+    lines: [{ itemId: ITEM, quantity: 250, unitCode: "g" }],
+    ...overrides,
+  };
+}
+
+test("parsePublishRecipeCommandV1 accepts a valid command", () => {
+  const parsed = parsePublishRecipeCommandV1(validPublishCommand());
+  assert.ok(parsed);
+  assert.equal(parsed.restaurantId, RESTAURANT);
+  assert.equal(parsed.productId, PRODUCT);
+  assert.equal(parsed.modifierId, null);
+  assert.equal(parsed.notes, null);
+  assert.deepEqual(parsed.lines, [{ itemId: ITEM, quantity: 250, unitCode: "g" }]);
+});
+
+test("parsePublishRecipeCommandV1 fills optional modifierId and notes as null", () => {
+  const command = validPublishCommand();
+  delete command.modifierId;
+  delete command.notes;
+  const parsed = parsePublishRecipeCommandV1(command);
+  assert.ok(parsed);
+  assert.equal(parsed.modifierId, null);
+  assert.equal(parsed.notes, null);
+});
+
+test("parsePublishRecipeCommandV1 rejects an empty, duplicated or invalid line list", () => {
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ lines: [] })), undefined);
+  assert.equal(
+    parsePublishRecipeCommandV1(validPublishCommand({
+      lines: [
+        { itemId: ITEM, quantity: 1, unitCode: "g" },
+        { itemId: ITEM, quantity: 2, unitCode: "g" },
+      ],
+    })),
+    undefined,
+  );
+  assert.equal(
+    parsePublishRecipeCommandV1(validPublishCommand({
+      lines: [{ itemId: ITEM, quantity: 0, unitCode: "g" }],
+    })),
+    undefined,
+  );
+});
+
+test("parsePublishRecipeCommandV1 rejects unknown keys and malformed scope", () => {
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ recipeId: RECIPE })), undefined);
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ restaurantId: "not-a-uuid" })), undefined);
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ modifierId: "not-a-uuid" })), undefined);
+  assert.equal(parsePublishRecipeCommandV1(validPublishCommand({ notes: "  " })), undefined);
+});
+
 test("parseInventoryMovementRequestV1 accepts a valid request", () => {
   assert.ok(parseInventoryMovementRequestV1(validMovementRequest()));
 });
@@ -199,6 +267,58 @@ test("parseInventoryMovementRequestV1 rejects an unknown kind", () => {
 
 test("parseInventoryMovementRequestV1 rejects a decimal unit cost", () => {
   assert.equal(parseInventoryMovementRequestV1(validMovementRequest({ unitCostMinor: 1.5 })), undefined);
+});
+
+// ---- P1: the transfer target is an explicit warehouse, not the pair id ----------------------
+
+test("parseInventoryMovementRequestV1 accepts a transfer with toWarehouseId and a null pair id", () => {
+  const parsed = parseInventoryMovementRequestV1(validMovementRequest({
+    kind: "transfer_out",
+    quantityDelta: -5,
+    toWarehouseId: WAREHOUSE,
+    transferPairId: null,
+  }));
+  assert.ok(parsed);
+  assert.equal(parsed.toWarehouseId, WAREHOUSE);
+  assert.equal(parsed.transferPairId, null);
+});
+
+test("parseInventoryMovementRequestV1 rejects a transfer without toWarehouseId", () => {
+  const missing = validMovementRequest({ kind: "transfer_in", quantityDelta: 5, transferPairId: null });
+  delete missing.toWarehouseId;
+  assert.equal(parseInventoryMovementRequestV1(missing), undefined);
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({
+      kind: "transfer_in",
+      quantityDelta: 5,
+      toWarehouseId: null,
+      transferPairId: null,
+    })),
+    undefined,
+  );
+});
+
+test("parseInventoryMovementRequestV1 rejects toWarehouseId outside a transfer", () => {
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({
+      kind: "adjustment",
+      quantityDelta: -5,
+      reason: "ajuste",
+      toWarehouseId: WAREHOUSE,
+    })),
+    undefined,
+  );
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({ toWarehouseId: "not-an-id" })),
+    undefined,
+  );
+});
+
+test("parseInventoryMovementRequestV1 rejects a client-supplied transfer pair id", () => {
+  assert.equal(
+    parseInventoryMovementRequestV1(validMovementRequest({ transferPairId: MOVEMENT })),
+    undefined,
+  );
 });
 
 test("parsePurchaseOrderV1 accepts a valid purchase order", () => {

@@ -1,5 +1,5 @@
 {
-  "sub": "Ronda 2026-11-25: migraciones de desarrollo aplicadas. Lo aplicado esta verificado en base de datos (postcheck y dry-run), pero NADA nuevo se ha probado aun en navegador ni con dispositivos reales.",
+  "sub": "Ronda 2026-11-25/26: 21 migraciones aplicadas en desarrollo (13 + 8 de la ola M3). Verificado en base de datos (postcheck y dry-run); NADA nuevo se ha probado aun en navegador ni con dispositivos reales.",
   "sections": [
     {
       "t": "0. Preparacion",
@@ -26,15 +26,15 @@
           "s": [
             "Ejecuta el preflight en solo lectura contra el proyecto de desarrollo"
           ],
-          "e": "lastRemote = 20261126000300, sin faltantes ni duplicados y segundo dry-run upToDate.",
+          "e": "lastRemote = 20261126001100, sin faltantes ni duplicados y segundo dry-run upToDate.",
           "checked": true
         },
         {
           "id": "m-catalog",
           "h": "Catalogo y privilegios",
           "s": [
-            "Revisa el postcheck: 65 tablas aseguradas, 11 politicas, 128 funciones SECURITY DEFINER",
-            "Confirma EXECUTE de app_api en las funciones de sync e inventario"
+            "Revisa el postcheck: 69 tablas aseguradas, 15 politicas, 159 funciones SECURITY DEFINER",
+            "Confirma EXECUTE de app_api en las funciones de sync, inventario, compras y costeo"
           ],
           "e": "app_api: true, authenticated: false, owner: true en las funciones verificadas; ninguna tabla de app sin RLS.",
           "checked": true
@@ -55,12 +55,13 @@
         },
         {
           "id": "m-inventory-ui",
-          "h": "Inventario cuando llegue su UI/API",
+          "h": "Inventario en /app/inventario",
           "s": [
-            "Lista insumos, almacenes y movimientos"
+            "Revisa insumos, almacenes, movimientos, recetas, compras y alertas",
+            "Prueba un ajuste, una transferencia y una recepcion"
           ],
-          "e": "Lecturas por membresia/sucursal y escrituras solo por funciones; sin acceso directo indebido.",
-          "block": "La UI de inventario y los grants de app_api del catalogo (PR #90) aun no estan en main."
+          "e": "Lecturas por membresia/sucursal y escrituras por funciones; sin acceso directo indebido.",
+          "block": "Falta la verificacion visual real (desktop y 390x844) y las pruebas HTTP contractuales de inventario."
         }
       ]
     }
@@ -68,8 +69,8 @@
   "r2": {},
   "changes": [
     {
-      "h": "13 migraciones aplicadas en el Supabase de desarrollo",
-      "p": "Pizza v2 y su probe, zonas/urbanizacion, fix de confirmacion pizza v2, sync (contacto, capturas abiertas, ledger, frontera API, confirmacion con cobertura, pull/review) e inventario (catalogo, ledger, recetas). Protocolo 19.6: probe local, sonda encadenada rollback-only, respaldo, dry-run exacto, apply unico, postcheck y segundo dry-run."
+      "h": "21 migraciones aplicadas en el Supabase de desarrollo",
+      "p": "Lote 1 (13): pizza v2, zonas, sync e inventario base. Lote 2 (8): compras, consumo por venta, funciones API, cancelacion de linea, movimientos, recetas API, compras API y costeo. Protocolo 19.6 completo en ambos lotes: probe local, sonda encadenada rollback-only, respaldo, dry-run exacto, apply unico, postcheck y segundo dry-run."
     },
     {
       "h": "Excluida 20260908000100",

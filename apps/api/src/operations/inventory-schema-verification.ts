@@ -14,3 +14,35 @@ export function inventoryLedgerInvariantSql(): string {
 export function inventoryRecipeInvariantSql(): string {
   return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_recipes_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
 }
+
+export function inventoryApiFunctionsInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_api_functions_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventoryPurchasingInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_purchasing_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventorySaleConsumptionInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_sale_consumption_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventoryLineCancelInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_line_cancel_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventoryMovementsApiInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_movements_api_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventoryRecipeApiInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_recipe_api_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventoryPurchasingApiInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_purchasing_api_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
+
+export function inventoryCostingApiInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_costing_api_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}
