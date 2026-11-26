@@ -225,6 +225,9 @@ test("purchase money formats from the exact minor total, never a local sum", () 
   assert.equal(formatMinorUnits(0, "MXN"), "$0.00");
   assert.match(formatMinorUnits(100, "JPY"), /100$/u);
   assert.doesNotMatch(formatMinorUnits(100, "JPY"), /\./u);
+  assert.match(formatMinorUnits(100, "GBP"), /1\.00$/u);
+  assert.equal(formatMinorUnits(123_456_789, "MXN"), formatMinorUnits(123_456_789, "MXN"));
+  assert.doesNotMatch(formatMinorUnits(123_456_789, "MXN"), /e/iu);
   assert.equal(formatMinorUnits(100, "ZZZ"), "Moneda no admitida");
 });
 

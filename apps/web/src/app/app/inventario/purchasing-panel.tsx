@@ -110,6 +110,11 @@ export function PurchasingPanel({
   const deviceId = useDeviceId();
 
   useEffect(() => {
+    if (!canManage) {
+      setSuppliers(undefined);
+      setSuppliersError(undefined);
+      return undefined;
+    }
     let cancelled = false;
     setSuppliers(undefined);
     setSuppliersError(undefined);
@@ -127,9 +132,14 @@ export function PurchasingPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [action, suppliersReload]);
+  }, [action, canManage, suppliersReload]);
 
   useEffect(() => {
+    if (!canManage) {
+      setOrders(undefined);
+      setOrdersError(undefined);
+      return undefined;
+    }
     let cancelled = false;
     setOrders(undefined);
     setOrdersError(undefined);
@@ -147,10 +157,10 @@ export function PurchasingPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [action, ordersReload, statusFilter]);
+  }, [action, canManage, ordersReload, statusFilter]);
 
   useEffect(() => {
-    if (orderId === "") {
+    if (!canManage || orderId === "") {
       setDetail(undefined);
       setDetailError(undefined);
       return undefined;
@@ -172,7 +182,7 @@ export function PurchasingPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [action, detailReload, orderId]);
+  }, [action, canManage, detailReload, orderId]);
 
   useEffect(() => {
     if (notice === undefined) return undefined;
@@ -240,7 +250,7 @@ export function PurchasingPanel({
           <p className="text-sm text-text-muted">Registra proveedores, crea órdenes y recíbelas contra un almacén.</p>
         ) : (
           <p role="status" className="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-muted">
-            Tu rol permite consultar las compras, pero no modificarlas.
+            Tu rol no permite administrar compras. Pide a un encargado que registre proveedores y órdenes.
           </p>
         )}
       </div>
@@ -252,16 +262,16 @@ export function PurchasingPanel({
         <p role="alert" className="rounded-lg border border-error bg-error-bg px-3 py-2 text-sm">{actionError}</p>
       )}
 
-      <section className="grid gap-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h3 className="break-words font-heading text-base font-semibold">Proveedores</h3>
-          {canManage && (
-            <button type="button" className={uiButton("primary", "w-full sm:w-auto")}
-              onClick={() => setDialog({ kind: "supplier" })}>
-              Nuevo proveedor
-            </button>
-          )}
-        </div>
+      {canManage && (
+        <>
+          <section className="grid gap-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="break-words font-heading text-base font-semibold">Proveedores</h3>
+              <button type="button" className={uiButton("primary", "w-full sm:w-auto")}
+                onClick={() => setDialog({ kind: "supplier" })}>
+                Nuevo proveedor
+              </button>
+            </div>
 
         {suppliers === undefined && suppliersError === undefined && (
           <p role="status" className="text-sm text-text-muted">Cargando proveedores…</p>
@@ -377,6 +387,8 @@ export function PurchasingPanel({
           </section>
         )}
       </section>
+        </>
+      )}
 
       {dialog?.kind === "supplier" && (
         <SupplierDialog
@@ -512,7 +524,7 @@ function OrderDetail({ order, canManage, timeZone, onReceive }: {
         </span>
       )}
       <ul className="grid gap-2">
-        {order.lines.map((line) => <li key={line.itemId}><OrderLine line={line} currency={order.currency} /></li>)}
+        {order.lines.map((line, index) => <li key={`${line.itemId}-${index}`}><OrderLine line={line} currency={order.currency} /></li>)}
       </ul>
       <p className="text-sm font-semibold">Total de la orden: {formatMinorUnits(order.totalMinor, order.currency)}</p>
       {receivable && canManage && (

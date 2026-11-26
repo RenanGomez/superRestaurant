@@ -59,27 +59,38 @@ export function formatInventoryNumber(value: number): string {
   return NUMBER_FORMAT.format(value);
 }
 
-/** Currencies whose minor-unit scale this screen can display exactly. */
-const PURCHASING_FRACTION_DIGITS: Readonly<Record<string, number>> = Object.freeze({
-  CAD: 2,
-  EUR: 2,
-  JPY: 0,
-  MXN: 2,
-  USD: 2,
-});
+/**
+ * Currencies this runtime knows. `Intl` happily formats an invented code such as `ZZZ` using the
+ * code itself as the symbol, so the list is the only reliable way to reject an unknown ISO code
+ * instead of printing an amount that looks valid.
+ */
+const KNOWN_CURRENCIES: ReadonlySet<string> = new Set(
+  typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("currency") : [],
+);
 
 /**
  * Presentation-only money formatter for purchase totals the server already froze. It splits the
  * exact minor-unit integer with BigInt (never a float division), derives the decimal scale from the
  * currency and reuses the locale's own symbol, grouping and sign placement. It never adds or
  * recomputes anything: the number passed in is the server's own `totalMinor`.
+ *
+ * The scale comes from `Intl` itself, so every ISO code the runtime knows works; a code the runtime
+ * does not know is reported instead of printing a wrong amount.
  */
 export function formatMinorUnits(amountMinor: number, currency: string, locale = "es-MX"): string {
   if (!Number.isSafeInteger(amountMinor)) return "Monto no válido";
   const normalized = currency.trim().toUpperCase();
-  if (!Object.hasOwn(PURCHASING_FRACTION_DIGITS, normalized)) return "Moneda no admitida";
-  const digits = PURCHASING_FRACTION_DIGITS[normalized] ?? 0;
-  const formatter = new Intl.NumberFormat(locale, { currency: normalized, style: "currency" });
+  if (!/^[A-Z]{3}$/u.test(normalized)) return "Moneda no admitida";
+  if (!KNOWN_CURRENCIES.has(normalized)) return "Moneda no admitida";
+  let formatter: Intl.NumberFormat;
+  let digits: number;
+  try {
+    formatter = new Intl.NumberFormat(locale, { currency: normalized, style: "currency" });
+    digits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return "Moneda no admitida";
+  }
+  if (!Number.isInteger(digits) || digits < 0 || digits > 4) return "Moneda no admitida";
   const scale = 10n ** BigInt(digits);
   const negative = amountMinor < 0;
   const absoluteMinor = negative ? BigInt(-amountMinor) : BigInt(amountMinor);
