@@ -1,3 +1,12 @@
+## Migraciones remotas de desarrollo aplicadas — 2026-11-25/26 (nivel A, datos)
+
+- **Tarea y estado:** aplicar al Supabase de desarrollo `zwbyiefqeujstyzysydn` todas las migraciones pendientes con el protocolo 19.6. **DONE** en dev. Informe: `docs/agentic/dev-migrations-2026-11-25.md`.
+- **Estado real previo:** `lastRemote` era `20261106000100`. Se aplicaron **21** en dos lotes: 13 hasta `20261126000300` (pizza v2, zonas, sync e inventario base) y 8 más al fusionarse la ola M3 (`20261126000400`…`001100`: compras, consumo por venta, funciones API, cancelación de línea, movimientos, recetas API, compras API y costeo).
+- **Puertas lote 2:** probe local `inventory_schema_rollback` ok con **88** migraciones desde cero (`stopped=true`); sonda encadenada rollback-only de las 8 contra el remoto real (`ROLLBACK ok`); respaldo previo verificado (1479 entradas TOC); dry-run anunció exactamente las 8; apply único en 23 s; postcheck `lastRemote=20261126001100`, sin faltantes ni duplicados, `upToDate=true`; segundo dry-run `upToDate=true`.
+- **Catálogo final:** 69 tablas aseguradas (antes 50), 15 políticas (antes 5), 159 funciones `SECURITY DEFINER` (antes 100). `EXECUTE` de `app_api` correcto en sync, inventario, compras, consumo, recetas y costeo; ninguna tabla de `app` sin RLS.
+- **Desviaciones:** (1) no hay staging provisionado; dev fue el destino único. (2) `20260908000100` no tiene fila en el historial remoto pero sus objetos ya existen (`42P07` en la sonda): se excluyó y no se editó el historial a mano; queda reconciliación pendiente. (3) `20261120000200` no trae `BEGIN/COMMIT`, se sondeó una copia envuelta y se aplicó el archivo real. (4) El checkout principal estaba en uso por otra sesión; todo se ejecutó desde el worktree aislado `C:\Users\Emmanuel G\AppData\Local\Temp\opencode\sr-mig-main`, y el informe va en la rama `docs/dev-migrations-20261125`.
+- **Siguiente acción mínima:** mergear `docs/dev-migrations-20261125`; API local reconstruido y verificado contra el esquema nuevo (`/health` 200, `/api/v1/health` 200, `/ready` 200, `/access/memberships` 401, proceso detenido); definir `SYNC_CURSOR_SECRET` (≥32) en el runtime antes de probar sync (valor nunca registrado).
+
 ## Ola M3 inventario — API completa y pantalla (2026-11-25, nivel A/B/C)
 
 - **API de inventario cerrada (#106):** alertas de stock mínimo, costo medio ponderado entero con resto, coste de receta y margen estimado con catálogo/receta vigentes; revisión B APROBAR. **88 migraciones** desde cero en verde.
