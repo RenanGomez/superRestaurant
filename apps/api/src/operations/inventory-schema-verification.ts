@@ -46,3 +46,7 @@ export function inventoryPurchasingApiInvariantSql(): string {
 export function inventoryCostingApiInvariantSql(): string {
   return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_costing_api_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
 }
+
+export function inventoryDefaultWarehouseInvariantSql(): string {
+  return extractMigrationBody(readFileSync(join(repositoryRoot, "supabase", "tests", "inventory_default_warehouse_invariants.sql"), "utf8").replace(/rollback;\s*$/iu, "commit;"));
+}

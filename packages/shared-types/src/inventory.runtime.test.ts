@@ -46,6 +46,7 @@ function validWarehouse(overrides: Record<string, unknown> = {}): Record<string,
     branchId: BRANCH,
     name: "Almacén principal",
     active: true,
+    isDefault: true,
     ...overrides,
   };
 }
@@ -148,7 +149,22 @@ test("parseInventoryItemV1 rejects an extra key", () => {
 });
 
 test("parseInventoryWarehouseV1 accepts a valid warehouse", () => {
-  assert.ok(parseInventoryWarehouseV1(validWarehouse()));
+  const parsed = parseInventoryWarehouseV1(validWarehouse());
+  assert.ok(parsed);
+  assert.equal(parsed.isDefault, true);
+  assert.equal(parseInventoryWarehouseV1(validWarehouse({ isDefault: false }))?.isDefault, false);
+});
+
+test("parseInventoryWarehouseV1 rejects a missing isDefault key", () => {
+  const warehouse = validWarehouse();
+  delete warehouse.isDefault;
+  assert.equal(parseInventoryWarehouseV1(warehouse), undefined);
+});
+
+test("parseInventoryWarehouseV1 requires a strict boolean isDefault", () => {
+  assert.equal(parseInventoryWarehouseV1(validWarehouse({ isDefault: "true" })), undefined);
+  assert.equal(parseInventoryWarehouseV1(validWarehouse({ isDefault: 1 })), undefined);
+  assert.equal(parseInventoryWarehouseV1(validWarehouse({ isDefault: null })), undefined);
 });
 
 test("parseInventoryWarehouseV1 enforces the database name length of 160 characters", () => {

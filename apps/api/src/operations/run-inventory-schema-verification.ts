@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
-import { inventoryApiFunctionsInvariantSql, inventoryCostingApiInvariantSql, inventoryInvariantSql, inventoryLedgerInvariantSql, inventoryLineCancelInvariantSql, inventoryMovementsApiInvariantSql, inventoryPurchasingApiInvariantSql, inventoryPurchasingInvariantSql, inventoryRecipeApiInvariantSql, inventoryRecipeInvariantSql, inventorySaleConsumptionInvariantSql } from "./inventory-schema-verification.js";
+import { inventoryApiFunctionsInvariantSql, inventoryCostingApiInvariantSql, inventoryDefaultWarehouseInvariantSql, inventoryInvariantSql, inventoryLedgerInvariantSql, inventoryLineCancelInvariantSql, inventoryMovementsApiInvariantSql, inventoryPurchasingApiInvariantSql, inventoryPurchasingInvariantSql, inventoryRecipeApiInvariantSql, inventoryRecipeInvariantSql, inventorySaleConsumptionInvariantSql } from "./inventory-schema-verification.js";
 
 const local = new LocalPostgres({ marker: "LOCAL_INVENTORY_SCHEMA_ONLY", databasePrefix: "superrestaurant_inventory", authUsersExtraColumns: ", raw_user_meta_data jsonb" });
 let stage = "configuration";
@@ -21,6 +21,7 @@ try {
   if (!names.includes("20261126001000_inventory_purchasing_api.sql")) throw new Error("INVENTORY_PURCHASING_API_MIGRATION_MISSING");
   if (!names.includes("20261126001100_inventory_costing_api.sql")) throw new Error("INVENTORY_COSTING_API_MIGRATION_MISSING");
   if (!names.includes("20261126001200_inventory_manual_movement_api.sql")) throw new Error("INVENTORY_MANUAL_MOVEMENT_API_MIGRATION_MISSING");
+  if (!names.includes("20261126001300_inventory_default_warehouse.sql")) throw new Error("INVENTORY_DEFAULT_WAREHOUSE_MIGRATION_MISSING");
   stage = "migrations";
   await local.applyMigrations(names);
   const summary = "select (select count(*) from app.inventory_items)::int as items, (select count(*) from app.inventory_warehouses)::int as warehouses, (select count(*) from app.inventory_movements)::int as movements, (select count(*) from app.inventory_balances)::int as balances, (select count(*) from app.inventory_recipes)::int as recipes, (select count(*) from app.inventory_recipe_lines)::int as recipe_lines, (select count(*) from app.inventory_suppliers)::int as suppliers, (select count(*) from app.inventory_purchase_orders)::int as purchase_orders, (select count(*) from app.inventory_purchase_order_lines)::int as purchase_order_lines, (select count(*) from app.inventory_consumptions)::int as consumptions, (select count(*)::int from pg_catalog.pg_policies where schemaname='app' and tablename in ('inventory_items','inventory_warehouses','inventory_movements','inventory_balances','inventory_recipes','inventory_recipe_lines','inventory_suppliers','inventory_purchase_orders','inventory_purchase_order_lines','inventory_consumptions')) as policies";
@@ -39,6 +40,7 @@ try {
     ["recipe-api", inventoryRecipeApiInvariantSql()],
     ["purchasing-api", inventoryPurchasingApiInvariantSql()],
     ["costing-api", inventoryCostingApiInvariantSql()],
+    ["default-warehouse", inventoryDefaultWarehouseInvariantSql()],
   ];
   for (const [label, sql] of invariants) {
     await local.admin.query("BEGIN");

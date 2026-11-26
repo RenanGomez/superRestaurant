@@ -26,6 +26,7 @@ import {
   validatePurchaseOrderDraft,
   validateRecipeLineDrafts,
   validateSupplierDraft,
+  warehouseDefaultLabel,
 } from "./inventory-ui.js";
 
 test("inventory tabs are stable and parse untrusted values", () => {
@@ -56,6 +57,11 @@ test("unit labels are readable for operators", () => {
   assert.equal(inventoryUnitLabel("ml"), "mililitros");
   assert.equal(inventoryUnitLabel("piece"), "pieza");
   assert.equal(inventoryUnitLabel("unknown"), "unidad");
+});
+
+test("default warehouse badge is explicit only for the default", () => {
+  assert.equal(warehouseDefaultLabel(true), "Predeterminado");
+  assert.equal(warehouseDefaultLabel(false), null);
 });
 
 test("search matches name and internal key case-insensitively", () => {

@@ -630,6 +630,7 @@ function readCreateItem(input: unknown): CreateItemCommand | undefined {
 type WarehouseCommand = {
   readonly name: string;
   readonly active: boolean;
+  readonly isDefault: boolean;
 };
 
 function readCreateWarehouse(input: unknown): WarehouseCommand | undefined {
@@ -637,7 +638,10 @@ function readCreateWarehouse(input: unknown): WarehouseCommand | undefined {
   if (record === undefined) return undefined;
   const name = readText(own(record, "name"), 160);
   const active = readBoolean(own(record, "active"), true);
-  return name === undefined || active === undefined ? undefined : { active, name };
+  const isDefault = readBoolean(own(record, "isDefault"), false);
+  return name === undefined || active === undefined || isDefault === undefined
+    ? undefined
+    : { active, isDefault, name };
 }
 
 function readItemPatch(input: unknown): { readonly id: string; readonly patch: Readonly<Record<string, unknown>> } | undefined {
@@ -689,6 +693,11 @@ function readWarehousePatch(input: unknown): { readonly id: string; readonly pat
     const active = readBoolean(own(record, "active"));
     if (active === undefined) return undefined;
     patch["active"] = active;
+  }
+  if (Object.hasOwn(record, "isDefault")) {
+    const isDefault = readBoolean(own(record, "isDefault"));
+    if (isDefault === undefined) return undefined;
+    patch["isDefault"] = isDefault;
   }
   return Object.keys(patch).length === 0 ? undefined : { id, patch: Object.freeze(patch) };
 }

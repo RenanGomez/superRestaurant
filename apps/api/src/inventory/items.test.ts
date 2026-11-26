@@ -18,6 +18,7 @@ const branchId = "23723e10-c0bf-49fd-9363-4f0e2c60e955";
 const otherBranchId = "00000000-0000-4000-8000-000000000000";
 const itemId = "ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
 const warehouseId = "a409ec59-9f5e-496d-a45d-b83a46b49674";
+const foreignWarehouseId = "0f2b8c47-3f5e-4a1d-9c86-2b7c4e0d5a91";
 const scope = { restaurantId, branchId } as unknown as BranchScope;
 
 const itemRow = Object.freeze({
@@ -36,6 +37,7 @@ const warehouseRow = Object.freeze({
   branch_id: branchId,
   name: "Almacén central",
   active: true,
+  is_default: false,
 });
 
 const expectedItem = Object.freeze({
@@ -54,6 +56,7 @@ const expectedWarehouse = Object.freeze({
   branchId,
   name: "Almacén central",
   active: true,
+  isDefault: false,
 });
 
 const validItemInput = {
@@ -233,7 +236,56 @@ test("createWarehouse: stores a branch-scoped warehouse without a client-supplie
   const { service, database } = serviceFor();
   const warehouse = await service.createWarehouse(principal, { restaurantId, branchId, name: "Almacén central" });
   assert.deepEqual(warehouse, expectedWarehouse);
-  assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId, branchId, "Almacén central", true]);
+  assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId, branchId, "Almacén central", true, false]);
+  assert.equal(database.queries[0]?.sql.includes("app_private.create_inventory_warehouse"), true);
+  assert.match(database.queries[0]?.sql ?? "", /\$6::boolean/u);
+});
+
+test("createWarehouse: forwards isDefault as the sixth parameter", async () => {
+  const handler: Handler = (sql) => sql.includes("create_inventory_warehouse")
+    ? [{ ...warehouseRow, is_default: true }]
+    : [];
+  const { service, database } = serviceFor({ handler });
+  const warehouse = await service.createWarehouse(principal, {
+    active: true,
+    branchId,
+    isDefault: true,
+    name: "Almacén central",
+    restaurantId,
+  });
+  assert.equal(warehouse.isDefault, true);
+  assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId, branchId, "Almacén central", true, true]);
+});
+
+test("createWarehouse: rejects a non-boolean isDefault before touching the database", async () => {
+  const { service, database } = serviceFor();
+  await assert.rejects(
+    service.createWarehouse(principal, { branchId, isDefault: "true", name: "Almacén central", restaurantId }),
+    code("request"),
+  );
+  assert.equal(database.queries.length, 0);
+});
+
+test("createWarehouse: the default unique index conflict is a conflict", async () => {
+  const handler: Handler = () => {
+    throw Object.assign(new Error("duplicate default"), { code: "23505" });
+  };
+  const { service } = serviceFor({ handler });
+  await assert.rejects(
+    service.createWarehouse(principal, { branchId, isDefault: true, name: "Almacén central", restaurantId }),
+    code("conflict"),
+  );
+});
+
+test("createWarehouse: an inactive default (22000) is a request error", async () => {
+  const handler: Handler = () => {
+    throw Object.assign(new Error("default requires active"), { code: "22000" });
+  };
+  const { service } = serviceFor({ handler });
+  await assert.rejects(
+    service.createWarehouse(principal, { active: false, branchId, isDefault: true, name: "Almacén central", restaurantId }),
+    code("request"),
+  );
 });
 
 test("updateItem: merges the patch with the stored row and updates through the API function", async () => {
@@ -283,7 +335,59 @@ test("updateWarehouse: updates name and active through the API function", async 
   const updated = await service.updateWarehouse(principal, warehouseId, { name: "Almacén 2" });
   assert.equal(updated.name, "Almacén 2");
   const update = database.queries.find((query) => query.sql.includes("update_inventory_warehouse"));
-  assert.deepEqual(update?.parameters, [principal.actorId, warehouseId, "Almacén 2", true]);
+  assert.deepEqual(update?.parameters, [principal.actorId, warehouseId, "Almacén 2", true, false]);
+  assert.match(update?.sql ?? "", /\$5::boolean/u);
+});
+
+test("updateWarehouse: a patch without isDefault keeps the stored default", async () => {
+  const handler: Handler = (sql) => {
+    if (sql.includes("read_inventory_warehouse_for_manage")) return [{ ...warehouseRow, is_default: true }];
+    if (sql.includes("update_inventory_warehouse")) return [{ ...warehouseRow, is_default: true }];
+    return [];
+  };
+  const { service, database } = serviceFor({ handler });
+  const updated = await service.updateWarehouse(principal, warehouseId, { name: "Almacén 2" });
+  assert.equal(updated.isDefault, true);
+  const update = database.queries.find((query) => query.sql.includes("update_inventory_warehouse"));
+  assert.deepEqual(update?.parameters, [principal.actorId, warehouseId, "Almacén 2", true, true]);
+});
+
+test("updateWarehouse: an explicit isDefault is forwarded and becomes the fifth parameter", async () => {
+  const handler: Handler = (sql) => {
+    if (sql.includes("read_inventory_warehouse_for_manage")) return [warehouseRow];
+    if (sql.includes("update_inventory_warehouse")) return [{ ...warehouseRow, is_default: true }];
+    return [];
+  };
+  const { service, database } = serviceFor({ handler });
+  const updated = await service.updateWarehouse(principal, warehouseId, { isDefault: true });
+  assert.equal(updated.isDefault, true);
+  const update = database.queries.find((query) => query.sql.includes("update_inventory_warehouse"));
+  assert.deepEqual(update?.parameters, [principal.actorId, warehouseId, "Almacén central", true, true]);
+});
+
+test("updateWarehouse: rejects a non-boolean isDefault without updating", async () => {
+  const handler: Handler = (sql) => (sql.includes("read_inventory_warehouse_for_manage") ? [warehouseRow] : []);
+  const { service, database } = serviceFor({ handler });
+  await assert.rejects(service.updateWarehouse(principal, warehouseId, { isDefault: "yes" }), code("request"));
+  assert.equal(database.queries.some((query) => query.sql.includes("update_inventory_warehouse")), false);
+});
+
+test("updateWarehouse: a warehouse from another restaurant/branch is missing and its update is never executed", async () => {
+  const handler: Handler = (sql, parameters) => {
+    if (sql.includes("read_inventory_warehouse_for_manage")) {
+      return parameters[1] === foreignWarehouseId ? [] : [warehouseRow];
+    }
+    if (sql.includes("update_inventory_warehouse")) return [warehouseRow];
+    return [];
+  };
+  const { service, database } = serviceFor({ handler });
+  await assert.rejects(
+    service.updateWarehouse(principal, foreignWarehouseId, { isDefault: true }),
+    code("missing"),
+  );
+  const read = database.queries.find((query) => query.sql.includes("read_inventory_warehouse_for_manage"));
+  assert.deepEqual(read?.parameters, [principal.actorId, foreignWarehouseId]);
+  assert.equal(database.queries.some((query) => query.sql.includes("update_inventory_warehouse")), false);
 });
 
 test("HTTP contract: 401, 400 INVENTORY_REQUEST_INVALID, 201 no-store, 403 ACTION_NOT_AUTHORIZED", async () => {

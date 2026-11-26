@@ -43,8 +43,8 @@ begin
     'app_private.update_inventory_item(uuid,uuid,text,text,text,integer,integer,boolean)',
     'app_private.list_inventory_warehouses(uuid,uuid,uuid)',
     'app_private.read_inventory_warehouse_for_manage(uuid,uuid)',
-    'app_private.create_inventory_warehouse(uuid,uuid,uuid,text,boolean)',
-    'app_private.update_inventory_warehouse(uuid,uuid,text,boolean)'
+    'app_private.create_inventory_warehouse(uuid,uuid,uuid,text,boolean,boolean)',
+    'app_private.update_inventory_warehouse(uuid,uuid,text,boolean,boolean)'
   ] loop
     if not pg_catalog.has_function_privilege('app_api', function_name, 'EXECUTE') then
       raise exception 'app_api cannot execute %', function_name;
@@ -60,8 +60,8 @@ begin
     'app_private.update_inventory_item(uuid,uuid,text,text,text,integer,integer,boolean)',
     'app_private.list_inventory_warehouses(uuid,uuid,uuid)',
     'app_private.read_inventory_warehouse_for_manage(uuid,uuid)',
-    'app_private.create_inventory_warehouse(uuid,uuid,uuid,text,boolean)',
-    'app_private.update_inventory_warehouse(uuid,uuid,text,boolean)'
+    'app_private.create_inventory_warehouse(uuid,uuid,uuid,text,boolean,boolean)',
+    'app_private.update_inventory_warehouse(uuid,uuid,text,boolean,boolean)'
   ] loop
     if not exists (
       select 1
@@ -101,7 +101,7 @@ begin
   from app_private.create_inventory_item(manager, r, 'FLOUR', 'Flour', 'g', 1000, 0, true) as created;
   if own_item is null then raise exception 'manager could not create an item'; end if;
   select created.id into own_warehouse
-  from app_private.create_inventory_warehouse(manager, r, b, 'Main', true) as created;
+  from app_private.create_inventory_warehouse(manager, r, b, 'Main', true, false) as created;
   if own_warehouse is null then raise exception 'manager could not create a warehouse'; end if;
 
   select count(*) into visible from app_private.list_inventory_items(manager, r);
@@ -117,7 +117,7 @@ begin
   from app_private.update_inventory_item(manager, own_item, 'FLOUR', 'Flour premium', 'g', 1000, 0, true) as updated;
   if updated_name <> 'Flour premium' then raise exception 'item update name = %', updated_name; end if;
   select updated.name into updated_name
-  from app_private.update_inventory_warehouse(manager, own_warehouse, 'Main 2', true) as updated;
+  from app_private.update_inventory_warehouse(manager, own_warehouse, 'Main 2', true, false) as updated;
   if updated_name <> 'Main 2' then raise exception 'warehouse update name = %', updated_name; end if;
 
   -- 4. A cashier has an active membership but cannot manage: 42501, never a silent no-op.
@@ -129,7 +129,7 @@ begin
     if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
   end;
   begin
-    perform app_private.create_inventory_warehouse(cashier, r, b, 'Cash', true);
+    perform app_private.create_inventory_warehouse(cashier, r, b, 'Cash', true, false);
     raise exception 'cashier created a warehouse';
   exception when others then
     get stacked diagnostics state = returned_sqlstate, err_message = message_text;
@@ -154,7 +154,7 @@ begin
   select created.id into foreign_item
   from app_private.create_inventory_item(foreign_actor, r2, 'FLOUR', 'Foreign flour', 'g', 1, 0, true) as created;
   select created.id into foreign_warehouse
-  from app_private.create_inventory_warehouse(foreign_actor, r2, b2, 'Foreign', true) as created;
+  from app_private.create_inventory_warehouse(foreign_actor, r2, b2, 'Foreign', true, false) as created;
 
   select count(*) into visible from app_private.list_inventory_items(manager, r2);
   if visible <> 0 then raise exception 'foreign item list returned % rows', visible; end if;
@@ -169,7 +169,7 @@ begin
   select count(*) into visible from app_private.read_inventory_warehouse_for_manage(manager, foreign_warehouse);
   if visible <> 0 then raise exception 'foreign warehouse read for manage returned % rows', visible; end if;
   select count(*) into visible
-  from app_private.update_inventory_warehouse(manager, foreign_warehouse, 'Hijack', true);
+  from app_private.update_inventory_warehouse(manager, foreign_warehouse, 'Hijack', true, false);
   if visible <> 0 then raise exception 'foreign warehouse update returned % rows', visible; end if;
 
   execute 'reset role';
