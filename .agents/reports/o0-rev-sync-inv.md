@@ -1,0 +1,14 @@
+VEREDICTO: CAMBIOS
+P1 apps/web/src/lib/offline/web-sync-bridge.ts:156 (uso :419) stableEntityId genera ids con nibbles de versión/variante aleatorios; apps/api/src/sync/sync-merge-executor.ts:65 los rechaza con INVALID_PAYLOAD (solo 1/8×1/4 válidos). Prueba: el repro de abajo imprime `false` para 7/7 keys; web-sync-bridge.test.ts:396 solo valida la forma laxa.
+P1 apps/web/src/lib/offline/web-sync-bridge.ts:421 el payload por defecto `{kind,summaryLabel}` no es un envelope Order válido; sync-merge-executor.ts:56-62 lo rechaza como UNSUPPORTED_OPERATION, y order_add_line/cash_collect (:142-144) como UNSUPPORTED_ENTITY, pero commitLocalOperation ya devolvió `committed:true`. Sin prueba en web-sync-bridge.test.ts para esas dos kinds (solo order_create).
+P1 apps/web/src/components/offline-runtime-mount.tsx:93 nunca llama POST /sync/devices; sync-merge-executor.ts:55 mapea device `unknown`→DEVICE_REVOKED y sync-engine/engine.ts:1084 revoca el scope en el primer push, así que la cola nunca drena y el scope queda inutilizable. `git grep -ln sync/devices` solo encuentra tests del API.
+P2 apps/web/src/lib/offline/web-sync-bridge.ts:472 requestResync siempre usa resyncFromSnapshot→/api/sync/snapshot, pero el API solo monta push/pull/devices/manual-review (sync.controller.ts, sync-review.controller.ts): la recuperación de RESYNC_REQUIRED da 404.
+P2 apps/web/src/lib/offline/web-sync-bridge.ts:223 (y :218) offlineCashUsedMinor se fuerza a 0 y cashierShiftOpen a false: el límite de efectivo offline del capability guard nunca se aplica ni se deriva del outbox/registro.
+Verificación (ids derivados vs regex del servidor):
+```
+node -e "function s(p){const t=p.join('\u0000');const f=(x)=>{let h=x>>>0;for(let i=0;i<t.length;i++){h^=t.charCodeAt(i);h=Math.imul(h,0x01000193)>>>0;}return h>>>0;};const x=[f(0x811c9dc5),f(0x9e3779b9),f(0x85ebca6b),f(0xc2b2ae35)].map(v=>v.toString(16).padStart(8,'0')).join('');return x.slice(0,8)+'-'+x.slice(8,12)+'-'+x.slice(12,16)+'-'+x.slice(16,20)+'-'+x.slice(20,32);}const re=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;const R='00000000-0000-4000-8000-000000000010',B='00000000-0000-4000-8000-000000000011';for(const k of ['same-key','intent-reload','owned-by-first-actor','race-evidence','x1','x2','x3']){const id=s([R,B,'order_create',k]);console.log(k,id,re.test(id));}"
+same-key 11f3616d-b58f-a7a1-a727-3547cfcc261d false
+intent-reload a9ce4b53-8e68-741f-c780-a2214f2dc183 false
+race-evidence 53954e36-cf9c-6d82-3e28-9e70c9d5bf46 false
+```
+Nota: idempotencia, aislamiento de scope y release/purge sí están cubiertos en web-sync-bridge.test.ts; no detectan lo anterior porque el transporte falso acepta cualquier envelope.
