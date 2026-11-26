@@ -131,8 +131,8 @@ try {
   // Pinned pre-20261102000100 copies: the live fixtures assert `lockedIngredientOptionIds`, a column
   // added after this candidate, so they cannot run against this migration set.
   const regressionSql = [
-    "catalog_halves_invariants_pre_20261102000100.sql",
-    "catalog_halves_product_level_invariants_pre_20261102000100.sql",
+    "historical/catalog_halves_invariants_pre_20261102000100.sql",
+    "historical/catalog_halves_product_level_invariants_pre_20261102000100.sql",
   ].map((name) => readFileSync(join(tests, name), "utf8"));
 
   stage = "migrated";
