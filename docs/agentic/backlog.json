@@ -1,4 +1,4 @@
-﻿{
+{
     "version":  "2.0.0",
     "milestone":  "M2/ola-0",
     "updatedAt":  "2026-11-26",
@@ -1584,14 +1584,14 @@
                       "deps":  [
                                    "m3-api-wire"
                                ],
-                      "status":  "in_progress",
-                      "id":  "m3-web-inventario",
-                      "title":  "UI web de inventario (insumos, movimientos, conteo, recetas, compras, alertas)",
-                      "level":  "C",
-                      "paths":  [
+                      "status": "done",
+                      "id": "m3-web-inventario",
+                      "title": "UI web de inventario (insumos, movimientos, conteo, recetas, compras, alertas)",
+                      "level": "C",
+                      "paths": [
                                     "apps/web/src/app/app/inventario"
                                 ],
-                      "note":  "PR #99 Insumos/Almacenes, #108 Movimientos, #109 Recetas, #113 Compras (proveedores, OC idempotente, recepcion) y #114 Alertas/costos (minimo, costo medio, costo de receta y margen). Pendiente: verificacion visual real (desktop y 390x844) y journey E2E."
+                      "note": "PR #99 Insumos/Almacenes, #108 Movimientos, #109 Recetas, #113 Compras, #114 Alertas/costos y #125 Almacén predeterminado (isDefault). Pase visual real 12/12 (6 pestañas × 1366×800 y 390×844) en docs/agentic/visual-verify-2026-11-26/."
                   },
                   {
                       "attempts":  0,
@@ -1626,13 +1626,15 @@
                       "deps":  [
                                    "m3-web-inventario"
                                ],
-                      "status":  "todo",
-                      "id":  "m3-e2e-journey",
-                      "title":  "Journey E2E de inventario",
-                      "level":  "B",
-                      "paths":  [
+                      "status": "done",
+                      "id": "m3-e2e-journey",
+                      "title": "Journey E2E de inventario",
+                      "level": "B",
+                      "paths": [
                                     "apps/web/e2e/journeys"
-                                ]
+                                ],
+                      "pr": 123,
+                      "note": "PR #123: journey-13-inventario.spec.ts verde en 1.7 min contra el stack local. Siembra con runId, asegura el almacén predeterminado (isDefault), restaura la receta previa y arma el plan con los helpers de captura (mitades). Verificado: la venta consume 120 g, alerta con déficit, margen, ajuste y cancelación con sale_reversal."
                   }
               ]
 }

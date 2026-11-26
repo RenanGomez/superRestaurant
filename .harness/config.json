@@ -122,7 +122,7 @@
                 "stallMin":  8,
                 "maxMin":  45,
                 "watch_note":  "agent.ps1 vigila opencode: sin sesión en bootMin → relanza una vez; sin salida stallMin → corta; total maxMin → corta (código 124, drain avisa). live.log del run muestra el latido cada 15 s.",
-                "worktreeDir":  "",
+                "worktreeDir":  "C:\\Users\\Emmanuel G\\Documents\\ChatGPT\\superRestaurant\\.harness\\worktrees",
                 "exe":  ""
             },
     "tokens":  {
