@@ -1,0 +1,146 @@
+{
+  "sub": "Ronda 2026-11-26: pestañas Compras y Alertas/costos, contratos HTTP de inventario y arnés de pruebas con transacciones. Verificado en CI y en PostgreSQL desechable; el pase visual real está bloqueado por la sesión E2E caducada.",
+  "sections": [
+    {
+      "t": "0. Preparación",
+      "items": [
+        {
+          "id": "prep-servers",
+          "h": "Levantar API y web locales",
+          "s": [
+            "Define SYNC_CURSOR_SECRET (32+ caracteres) en el entorno del API; sin él la API no arranca",
+            "Ejecuta start-local.bat",
+            "Abre la consola del navegador (F12)"
+          ],
+          "e": "API responde en /api/v1/health y la web abre /login sin errores de consola.",
+          "block": "El valor de SYNC_CURSOR_SECRET no se registra ni se pega en el chat."
+        },
+        {
+          "id": "prep-auth",
+          "h": "Refrescar la sesión de pruebas",
+          "s": [
+            "Ejecuta pnpm --filter @super-restaurant/web e2e:auth y completa el login en la ventana de Chrome",
+            "Alternativa: cierra Chrome por completo y ejecuta tools/agentic/local-servers/e2e-import-session.bat"
+          ],
+          "e": "playwright/.auth/user.json es nuevo y /app deja de redirigir a /login.",
+          "block": "Sesión actual caducada: el servidor responde Invalid Refresh Token (Refresh Token Not Found)."
+        }
+      ]
+    },
+    {
+      "t": "1. Migraciones y verificación de base",
+      "items": [
+        {
+          "id": "mig-preflight",
+          "h": "Preflight sin candidatas",
+          "s": [
+            "Ejecuta el preflight en solo lectura contra el proyecto de desarrollo"
+          ],
+          "e": "lastRemote = 20261126001100 y la única diferencia local es 20260908000100 (excluida).",
+          "checked": true
+        },
+        {
+          "id": "mig-schema",
+          "h": "Esquema de inventario desde cero",
+          "s": [
+            "Ejecuta verify:inventory-schema:rollback"
+          ],
+          "e": "status ok, 88 migraciones aplicadas y cleanup stopped=true.",
+          "checked": true
+        },
+        {
+          "id": "http-contracts",
+          "h": "Contratos HTTP de inventario",
+          "s": [
+            "Ejecuta test:http:local -- --local-disposable-only"
+          ],
+          "e": "10/10 flujos en verde; el flujo de inventario HTTP valida 401, 403, 400, 404, 409, totales del servidor, aislamiento y recepción.",
+          "checked": true
+        }
+      ]
+    },
+    {
+      "t": "2. Inventario en el navegador",
+      "items": [
+        {
+          "id": "ui-tabs",
+          "h": "Seis pestañas de /app/inventario",
+          "s": [
+            "Recorre insumos, recetas, almacenes, movimientos, compras y alertas en escritorio",
+            "Cambia de pestaña y recarga: la pestaña activa debe conservarse en ?tab="
+          ],
+          "e": "Cada pestaña carga sus datos sin errores de consola ni 5xx propios, y la pestaña activa queda en la URL.",
+          "block": "Bloqueado por la sesión E2E caducada; la spec e2e/visual/inventario.spec.ts queda lista para ejecutarse."
+        },
+        {
+          "id": "ui-compras",
+          "h": "Compras (proveedores, orden y recepción)",
+          "s": [
+            "Crea un proveedor y edítalo",
+            "Crea una orden con dos insumos y comprueba que el total lo pone el servidor",
+            "Recibe la orden contra un almacén"
+          ],
+          "e": "El total no cambia al reenviar el formulario; la recepción indica cuántos movimientos generó; sin diálogos nativos del navegador.",
+          "block": "Requiere sesión con catalog.manage; un rol sin ese permiso ve el aviso y no intenta leer."
+        },
+        {
+          "id": "ui-alertas",
+          "h": "Alertas y costos",
+          "s": [
+            "Revisa el saldo bajo mínimo y su déficit",
+            "Consulta el costo medio de un insumo con existencia",
+            "Consulta costo de receta y margen de un producto"
+          ],
+          "e": "Los importes coinciden con el API; sin costo registrado se avisa en lugar de mostrar 0 con moneda."
+        },
+        {
+          "id": "ui-mobile",
+          "h": "390x844 sin desbordes",
+          "s": [
+            "Repite la revisión con el perfil móvil"
+          ],
+          "e": "Sin desborde horizontal, controles táctiles de 44 px o más y textos legibles."
+        }
+      ]
+    },
+    {
+      "t": "3. Journey E2E de inventario",
+      "items": [
+        {
+          "id": "e2e-journey",
+          "h": "Crear insumo, almacén, receta, vender, cancelar y ver alerta",
+          "s": [
+            "Ejecuta el journey de inventario con el stack local"
+          ],
+          "e": "La venta descuenta la receta, la cancelación repone el saldo y la alerta aparece bajo el mínimo; consola limpia.",
+          "block": "Pendiente de implementación (m3-e2e-journey) y de la sesión E2E."
+        }
+      ]
+    }
+  ],
+  "r2": {},
+  "changes": [
+    {
+      "h": "Pestaña Compras",
+      "p": "Proveedores con alta y edición, órdenes de compra con clave de idempotencia estable y totales calculados por el servidor, y recepción contra un almacén con deviceId de sesión. Un rol sin catalog.manage ve el aviso y no intenta leer."
+    },
+    {
+      "h": "Pestaña Alertas y costos",
+      "p": "Saldo bajo mínimo con déficit, costo medio por almacén e insumo, costo de receta y margen del producto, todo desde el API y sin recalcular dinero en el cliente."
+    },
+    {
+      "h": "Contratos HTTP de inventario",
+      "p": "Flujo contractual con 9 bloques por HTTP real sobre PostgreSQL desechable y arnés de pruebas con transacciones pg reales; los 10 flujos locales quedan en verde."
+    }
+  ],
+  "decisions": [
+    {
+      "h": "Pase visual bloqueado por sesión",
+      "p": "La sesión guardada de Playwright está caducada (Invalid Refresh Token). El código, CI y PostgreSQL están verificados; la verificación visual necesita un login manual antes de declararse."
+    },
+    {
+      "h": "Lecturas de compras",
+      "p": "El API exige catalog.manage también para leer proveedores y órdenes. La UI se adapta; cambiarlo a catalog.read queda como deuda con pruebas de aislamiento."
+    }
+  ]
+}

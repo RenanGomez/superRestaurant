@@ -158,3 +158,11 @@ revisan al cierre del hito y, si aplica, pasan al backlog del siguiente.
 - **P3 (recetas):** las lecturas no validan sucursal activa como el publicador, y la prueba no ejercita concurrencia (la unicidad activa descansa en el advisory lock del publicador).
 - **P3 (UI inventario):** no existe helper de `inert`/`aria-hidden` de shell; el diálogo solo atrapa foco y cierra con Escape. Añadirlo cuando se unifique el patrón de diálogos.
 - **P3 (API):** `items.module.ts` quedó huérfano tras montar `ItemsController`/`ItemsService` en `AppModule`; borrarlo o unificar el patrón de módulos.
+
+## M3 inventario — P3 de la ola compras/contratos HTTP (2026-11-26)
+
+- **P3 (revisión `m3-rev-http-tests`):** `http-flow-inventory-api.ts` afirma `totalMinor === undefined` en la respuesta de creación, pero `CreatePurchaseOrderResultV1` nunca lo devuelve: la aserción es tautológica. El rechazo real (400 por `totalMinor` inyectado) ya cubre el contrato; puede retirarse.
+- **P3 (revisión `m3-rev-http-tests`):** el doble de `DATABASE_CLIENT` en `operations/http-test-app.ts` reimplementa la transacción (BEGIN/COMMIT/ROLLBACK) en lugar de reutilizar `runDatabaseTransaction` de `database.ts`; si falla `COMMIT` la conexión vuelve al pool sin marcarse. Unificar con el helper cuando se toque el arnés.
+- **P3 (revisión `m3-rev-http-tests`):** el replay de creación de OC solo cuenta órdenes; no comprueba líneas duplicadas ni la idempotencia de un segundo `POST /receive`.
+- **P3 (revisión `m3-rev-web-compras`):** el `deviceId` de recepción vive en `sessionStorage`, así que rota por sesión de navegador y debilita la traza del receptor. Decidir si el identificador de dispositivo debe persistir por equipo (registro de dispositivos) antes de producción.
+- **P3 (API de compras):** `listSuppliers`, `listPurchaseOrders` y `readPurchaseOrder` exigen `catalog.manage` (no `catalog.read`); la UI de compras ya no intenta leer sin ese permiso, pero semánticamente una lectura debería bastar con `catalog.read`. Cambiarlo exige pruebas de aislamiento nuevas.
