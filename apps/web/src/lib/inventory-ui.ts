@@ -5,12 +5,13 @@
 
 import { INVENTORY_UNITS, type InventoryUnitV1, type RecipeLineV1 } from "@super-restaurant/shared-types";
 
-export const INVENTORY_TABS = ["insumos", "recetas", "almacenes", "movimientos", "compras"] as const;
+export const INVENTORY_TABS = ["insumos", "recetas", "almacenes", "movimientos", "compras", "alertas"] as const;
 export type InventoryTab = (typeof INVENTORY_TABS)[number];
 
 export const DEFAULT_INVENTORY_TAB: InventoryTab = "insumos";
 
 export const INVENTORY_TAB_LABELS: Readonly<Record<InventoryTab, string>> = {
+  alertas: "Alertas",
   almacenes: "Almacenes",
   compras: "Compras",
   insumos: "Insumos",
@@ -57,6 +58,51 @@ const NUMBER_FORMAT = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 
 /** Formats a whole quantity for display (thousands separated with es-MX rules). */
 export function formatInventoryNumber(value: number): string {
   return NUMBER_FORMAT.format(value);
+}
+
+/**
+ * Presentation-only percentage between two exact minor-unit integers (`part / total`), with one
+ * decimal at most and a neutral dash when the total is zero or the input is not a safe integer.
+ * It never recomputes a price or a cost; the caller passes the server's own integers.
+ */
+export function formatPercentFromMinor(part: number, total: number): string {
+  if (!Number.isSafeInteger(part) || !Number.isSafeInteger(total) || total === 0) return "—";
+  const tenths = divideRounded(BigInt(part) * 1_000n, BigInt(total));
+  const negative = tenths < 0n;
+  const absolute = negative ? -tenths : tenths;
+  const whole = absolute / 10n;
+  const fraction = absolute % 10n;
+  const text = fraction === 0n
+    ? formatInventoryNumber(Number(whole))
+    : `${formatInventoryNumber(Number(whole))}.${fraction.toString()}`;
+  return `${negative ? "-" : ""}${text}%`;
+}
+
+/** Integer division rounded half away from zero, so the percentage never leaks a float. */
+function divideRounded(numerator: bigint, denominator: bigint): bigint {
+  const negative = (numerator < 0n) !== (denominator < 0n);
+  const absoluteNumerator = numerator < 0n ? -numerator : numerator;
+  const absoluteDenominator = denominator < 0n ? -denominator : denominator;
+  const rounded = (absoluteNumerator * 2n + absoluteDenominator) / (absoluteDenominator * 2n);
+  return negative ? -rounded : rounded;
+}
+
+export interface StockAlertSummaryInput {
+  readonly deficit: number;
+  readonly unitCode: string;
+}
+
+/** Operator-facing shortfall text for a low-stock alert, without internal codes. */
+export function stockAlertSummary(alert: StockAlertSummaryInput): string {
+  const deficit = Number.isSafeInteger(alert.deficit) && alert.deficit > 0 ? alert.deficit : 0;
+  if (deficit === 0) return "Sin déficit";
+  const unit = inventoryUnitLabel(alert.unitCode);
+  let label = unit;
+  if (deficit !== 1) {
+    if (unit === "pieza") label = "piezas";
+    else if (unit === "unidad") label = "unidades";
+  }
+  return `Faltan ${formatInventoryNumber(deficit)} ${label}`;
 }
 
 /**

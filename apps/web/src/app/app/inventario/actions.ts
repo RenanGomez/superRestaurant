@@ -41,12 +41,16 @@ export type InventoryOperation =
   | "listBalances"
   | "listItems"
   | "listMovements"
+  | "listProductCosts"
   | "listProducts"
   | "listPurchaseOrders"
   | "listRecipes"
+  | "listStockAlerts"
   | "listSuppliers"
   | "listWarehouses"
   | "publishRecipe"
+  | "readAverageCost"
+  | "readProductMargin"
   | "readPurchaseOrder"
   | "readRecipe"
   | "receivePurchaseOrder"
@@ -117,6 +121,52 @@ export interface PurchaseOrderReceiptMovementV1 {
   readonly movementId: string;
 }
 
+export interface StockAlertV1 {
+  readonly itemId: string;
+  readonly itemName: string;
+  readonly unitCode: InventoryUnitV1;
+  readonly warehouseId: string;
+  readonly warehouseName: string;
+  readonly quantity: number;
+  readonly minQuantity: number;
+  readonly deficit: number;
+}
+
+export interface AverageCostV1 {
+  readonly schemaVersion: 1;
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly warehouseId: string;
+  readonly itemId: string;
+  readonly quantity: number;
+  readonly valueMinor: number;
+  readonly unitCostMinor: number;
+  readonly currency: string | null;
+  readonly roundingRemainder: number;
+}
+
+export interface ProductCostV1 {
+  readonly itemId: string;
+  readonly itemName: string;
+  readonly unitCode: InventoryUnitV1;
+  readonly quantity: number;
+  readonly purchaseUnitFactor: number;
+  readonly unitCostMinor: number;
+  readonly lineCostMinor: number;
+  readonly currency: string | null;
+}
+
+export interface ProductMarginV1 {
+  readonly schemaVersion: 1;
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly productId: string;
+  readonly priceMinor: number;
+  readonly costMinor: number;
+  readonly marginMinor: number;
+  readonly currency: string;
+}
+
 export type InventoryActionResult =
   | { readonly ok: true; readonly items: readonly InventoryItemV1[] }
   | { readonly ok: true; readonly warehouses: readonly InventoryWarehouseV1[] }
@@ -131,6 +181,10 @@ export type InventoryActionResult =
   | { readonly ok: true; readonly order: PurchaseOrderDetailV1 }
   | { readonly ok: true; readonly created: PurchaseOrderCreatedV1 }
   | { readonly ok: true; readonly receipt: readonly PurchaseOrderReceiptMovementV1[] }
+  | { readonly ok: true; readonly alerts: readonly StockAlertV1[] }
+  | { readonly ok: true; readonly cost: AverageCostV1 }
+  | { readonly ok: true; readonly costs: readonly ProductCostV1[] }
+  | { readonly ok: true; readonly margin: ProductMarginV1 }
   | { readonly ok: true; readonly item: InventoryItemV1 }
   | { readonly ok: true; readonly warehouse: InventoryWarehouseV1 }
   | { readonly ok: true; readonly recorded: true }
@@ -155,12 +209,16 @@ const INVENTORY_OPERATIONS: ReadonlySet<InventoryOperation> = new Set([
   "listBalances",
   "listItems",
   "listMovements",
+  "listProductCosts",
   "listProducts",
   "listPurchaseOrders",
   "listRecipes",
+  "listStockAlerts",
   "listSuppliers",
   "listWarehouses",
   "publishRecipe",
+  "readAverageCost",
+  "readProductMargin",
   "readPurchaseOrder",
   "readRecipe",
   "receivePurchaseOrder",
@@ -172,11 +230,15 @@ const READ_OPERATIONS: ReadonlySet<InventoryOperation> = new Set([
   "listBalances",
   "listItems",
   "listMovements",
+  "listProductCosts",
   "listProducts",
   "listPurchaseOrders",
   "listRecipes",
+  "listStockAlerts",
   "listSuppliers",
   "listWarehouses",
+  "readAverageCost",
+  "readProductMargin",
   "readPurchaseOrder",
   "readRecipe",
 ]);
@@ -411,6 +473,54 @@ export async function inventoryAction(
     if (!reply.ok) return reply;
     const balances = parseBalancesList(reply.body, scope.restaurantId, scope.branchId);
     return balances === undefined ? unavailable() : { ok: true, balances };
+  }
+
+  if (operation === "listStockAlerts") {
+    const query = new URLSearchParams({ branchId: scope.branchId, restaurantId: scope.restaurantId });
+    const reply = await send(session.access_token, `${base}/alerts?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const alerts = parseStockAlertsList(reply.body, scope.restaurantId, scope.branchId);
+    return alerts === undefined ? unavailable() : { ok: true, alerts };
+  }
+
+  if (operation === "readAverageCost") {
+    const warehouseId = readUuidField(input, "warehouseId");
+    const itemId = readUuidField(input, "itemId");
+    if (warehouseId === undefined || itemId === undefined) return invalid();
+    const query = new URLSearchParams({
+      branchId: scope.branchId,
+      itemId,
+      restaurantId: scope.restaurantId,
+      warehouseId,
+    });
+    const reply = await send(session.access_token, `${base}/costs?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const cost = parseAverageCost(reply.body, scope.restaurantId, scope.branchId, warehouseId, itemId);
+    return cost === undefined ? unavailable() : { ok: true, cost };
+  }
+
+  if (operation === "listProductCosts") {
+    const productId = readUuidField(input, "productId");
+    if (productId === undefined) return invalid();
+    const query = new URLSearchParams({ productId, restaurantId: scope.restaurantId });
+    const reply = await send(session.access_token, `${base}/product-costs?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const costs = parseProductCostsList(reply.body, scope.restaurantId, productId);
+    return costs === undefined ? unavailable() : { ok: true, costs };
+  }
+
+  if (operation === "readProductMargin") {
+    const productId = readUuidField(input, "productId");
+    if (productId === undefined) return invalid();
+    const query = new URLSearchParams({
+      branchId: scope.branchId,
+      productId,
+      restaurantId: scope.restaurantId,
+    });
+    const reply = await send(session.access_token, `${base}/margins?${query.toString()}`, "GET");
+    if (!reply.ok) return reply;
+    const margin = parseProductMargin(reply.body, scope.restaurantId, scope.branchId, productId);
+    return margin === undefined ? unavailable() : { ok: true, margin };
   }
 
   if (operation === "createMovement") {
@@ -666,6 +776,166 @@ function parseBalancesList(
     balances.push(balance);
   }
   return balances;
+}
+
+function parseStockAlertsList(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+): readonly StockAlertV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId) {
+    return undefined;
+  }
+  const rawAlerts = own(record, "alerts");
+  if (!Array.isArray(rawAlerts)) return undefined;
+  const alerts: StockAlertV1[] = [];
+  for (const rawAlert of rawAlerts) {
+    const alert = parseStockAlert(rawAlert);
+    if (alert === undefined) return undefined;
+    alerts.push(alert);
+  }
+  return alerts;
+}
+
+function parseStockAlert(value: unknown): StockAlertV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined) return undefined;
+  const itemId = own(record, "itemId");
+  const warehouseId = own(record, "warehouseId");
+  const itemName = own(record, "itemName");
+  const warehouseName = own(record, "warehouseName");
+  const unitCode = own(record, "unitCode");
+  const quantity = readWholeNumber(own(record, "quantity"), 0);
+  const minQuantity = readWholeNumber(own(record, "minQuantity"), 0);
+  const deficit = readWholeNumber(own(record, "deficit"), 0);
+  if (typeof itemId !== "string" || !UUID_PATTERN.test(itemId)) return undefined;
+  if (typeof warehouseId !== "string" || !UUID_PATTERN.test(warehouseId)) return undefined;
+  if (typeof itemName !== "string" || itemName.trim().length === 0) return undefined;
+  if (typeof warehouseName !== "string" || warehouseName.trim().length === 0) return undefined;
+  if (!isInventoryUnit(unitCode)) return undefined;
+  if (quantity === undefined || minQuantity === undefined || deficit === undefined) return undefined;
+  return Object.freeze({ deficit, itemId, itemName, minQuantity, quantity, unitCode, warehouseId, warehouseName });
+}
+
+function parseAverageCost(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+  warehouseId: string,
+  itemId: string,
+): AverageCostV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId) {
+    return undefined;
+  }
+  if (own(record, "warehouseId") !== warehouseId || own(record, "itemId") !== itemId) return undefined;
+  const quantity = readWholeNumber(own(record, "quantity"), 0);
+  const valueMinor = readWholeNumber(own(record, "valueMinor"), 0);
+  const unitCostMinor = readWholeNumber(own(record, "unitCostMinor"), 0);
+  const roundingRemainder = readWholeNumber(own(record, "roundingRemainder"), 0);
+  const currency = readCurrency(own(record, "currency"));
+  if (quantity === undefined || valueMinor === undefined || unitCostMinor === undefined
+    || roundingRemainder === undefined || currency === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    branchId,
+    currency,
+    itemId,
+    quantity,
+    restaurantId,
+    roundingRemainder,
+    schemaVersion: 1 as const,
+    unitCostMinor,
+    valueMinor,
+    warehouseId,
+  });
+}
+
+function parseProductCostsList(
+  value: unknown,
+  restaurantId: string,
+  productId: string,
+): readonly ProductCostV1[] | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "productId") !== productId) {
+    return undefined;
+  }
+  const rawCosts = own(record, "costs");
+  if (!Array.isArray(rawCosts)) return undefined;
+  const costs: ProductCostV1[] = [];
+  for (const rawCost of rawCosts) {
+    const cost = parseProductCost(rawCost);
+    if (cost === undefined) return undefined;
+    costs.push(cost);
+  }
+  return costs;
+}
+
+function parseProductCost(value: unknown): ProductCostV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined) return undefined;
+  const itemId = own(record, "itemId");
+  const itemName = own(record, "itemName");
+  const unitCode = own(record, "unitCode");
+  const quantity = readWholeNumber(own(record, "quantity"), 1);
+  const purchaseUnitFactor = readWholeNumber(own(record, "purchaseUnitFactor"), 1);
+  const unitCostMinor = readWholeNumber(own(record, "unitCostMinor"), 0);
+  const lineCostMinor = readWholeNumber(own(record, "lineCostMinor"), 0);
+  const currency = readCurrency(own(record, "currency"));
+  if (typeof itemId !== "string" || !UUID_PATTERN.test(itemId)) return undefined;
+  if (typeof itemName !== "string" || itemName.trim().length === 0) return undefined;
+  if (!isInventoryUnit(unitCode)) return undefined;
+  if (quantity === undefined || purchaseUnitFactor === undefined || unitCostMinor === undefined
+    || lineCostMinor === undefined || currency === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    currency,
+    itemId,
+    itemName,
+    lineCostMinor,
+    purchaseUnitFactor,
+    quantity,
+    unitCode,
+    unitCostMinor,
+  });
+}
+
+function parseProductMargin(
+  value: unknown,
+  restaurantId: string,
+  branchId: string,
+  productId: string,
+): ProductMarginV1 | undefined {
+  const record = plainRecord(value);
+  if (record === undefined || own(record, "schemaVersion") !== 1
+    || own(record, "restaurantId") !== restaurantId || own(record, "branchId") !== branchId
+    || own(record, "productId") !== productId) {
+    return undefined;
+  }
+  const priceMinor = readWholeNumber(own(record, "priceMinor"), 0);
+  const costMinor = readWholeNumber(own(record, "costMinor"), 0);
+  const marginMinor = readInteger(own(record, "marginMinor"));
+  const currency = readCurrency(own(record, "currency"));
+  if (priceMinor === undefined || costMinor === undefined || marginMinor === undefined
+    || typeof currency !== "string") {
+    return undefined;
+  }
+  return Object.freeze({
+    branchId,
+    costMinor,
+    currency,
+    marginMinor,
+    priceMinor,
+    productId,
+    restaurantId,
+    schemaVersion: 1 as const,
+  });
 }
 
 function parseRecipesList(
@@ -1198,6 +1468,18 @@ function readOptionalText(value: unknown, maximumLength: number): string | null 
 
 function readWholeNumber(value: unknown, minimum: number): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum ? value : undefined;
+}
+
+function readInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+
+/** A three-letter ISO code, or `null` when the server has no cost yet. */
+function readCurrency(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toUpperCase();
+  return CURRENCY_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 function readBoolean(value: unknown, fallback?: boolean): boolean | undefined {
