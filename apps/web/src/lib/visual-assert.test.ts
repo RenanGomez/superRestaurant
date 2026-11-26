@@ -3,12 +3,30 @@ import test from "node:test";
 
 import {
   assertVisualSnapshot,
+  effectiveTargetSize,
   findViolations,
+  insetsFromPseudo,
+  mergeControlInsets,
   MIN_TARGET_PX,
+  type PseudoStyle,
   type VisualControl,
   type VisualSnapshot,
   type VisualViolation,
 } from "./visual-assert.js";
+
+function pseudo(overrides: Partial<PseudoStyle> = {}): PseudoStyle {
+  return {
+    content: '""',
+    position: "absolute",
+    pointerEvents: "auto",
+    inset: "-12px",
+    top: "-12px",
+    right: "-12px",
+    bottom: "-12px",
+    left: "-12px",
+    ...overrides,
+  };
+}
 
 function control(overrides: Partial<VisualControl> = {}): VisualControl {
   return { name: "Guardar", width: 44, height: 44, visible: true, ...overrides };
@@ -140,4 +158,85 @@ test("assertVisualSnapshot lanza un error legible con cada violación", () => {
       return true;
     },
   );
+});
+
+test("acepta 20×20 con -12 px por lado: el pseudo-elemento amplía a 44×44", () => {
+  const expanded = control({
+    width: 20,
+    height: 20,
+    insetLeft: -12,
+    insetTop: -12,
+    insetRight: -12,
+    insetBottom: -12,
+  });
+  assert.deepEqual(effectiveTargetSize(expanded), { width: 44, height: 44 });
+  assert.deepEqual(findViolations(snapshot({ controls: [expanded] })), []);
+});
+
+test("falla con 20×20 sin expansión", () => {
+  const violations = findViolations(snapshot({ controls: [control({ width: 20, height: 20 })] }));
+  assert.deepEqual(rules(violations), ["target-size"]);
+  assert.match(violations[0]?.message ?? "", /20×20px/);
+});
+
+test("falla si la expansión parcial no llega a 44 en ambos ejes", () => {
+  const partial = control({
+    width: 20,
+    height: 20,
+    insetLeft: -12,
+    insetTop: 0,
+    insetRight: -12,
+    insetBottom: 0,
+  });
+  assert.deepEqual(effectiveTargetSize(partial), { width: 44, height: 20 });
+  const violations = findViolations(snapshot({ controls: [partial] }));
+  assert.deepEqual(rules(violations), ["target-size"]);
+  assert.match(violations[0]?.message ?? "", /44×20px/);
+});
+
+test("insets no negativos no amplían el área", () => {
+  const shrunk = control({
+    width: 20,
+    height: 20,
+    insetLeft: 12,
+    insetTop: 12,
+    insetRight: 12,
+    insetBottom: 12,
+  });
+  assert.deepEqual(effectiveTargetSize(shrunk), { width: 20, height: 20 });
+  assert.deepEqual(rules(findViolations(snapshot({ controls: [shrunk] }))), ["target-size"]);
+});
+
+test("insetsFromPseudo ignora pointer-events: none", () => {
+  assert.equal(insetsFromPseudo(pseudo({ pointerEvents: "none" })), null);
+  const small = control({ width: 20, height: 20 });
+  assert.deepEqual(rules(findViolations(snapshot({ controls: [small] }))), ["target-size"]);
+});
+
+test("insetsFromPseudo ignora pseudo-elementos sin contenido o no absolutos", () => {
+  assert.equal(insetsFromPseudo(pseudo({ content: "none" })), null);
+  assert.equal(insetsFromPseudo(pseudo({ content: "normal" })), null);
+  assert.equal(insetsFromPseudo(pseudo({ position: "relative" })), null);
+  assert.equal(insetsFromPseudo(pseudo({ position: "static" })), null);
+});
+
+test("insetsFromPseudo lee longhand y shorthand en px", () => {
+  assert.deepEqual(insetsFromPseudo(pseudo()), { left: -12, top: -12, right: -12, bottom: -12 });
+  assert.deepEqual(
+    insetsFromPseudo(pseudo({ inset: "-12px -8px", top: "auto", right: "auto", bottom: "auto", left: "auto" })),
+    { left: -8, top: -12, right: -8, bottom: -12 },
+  );
+  assert.deepEqual(
+    insetsFromPseudo(pseudo({ top: "calc(1px + 2px)", right: "auto", bottom: "auto", left: "auto", inset: "-6px" })),
+    { left: -6, top: -6, right: -6, bottom: -6 },
+  );
+});
+
+test("mergeControlInsets toma la mayor expansión por lado entre ::before y ::after", () => {
+  const merged = mergeControlInsets(
+    { left: -6, top: -6, right: -6, bottom: -6 },
+    { left: -12, top: 0, right: -10, bottom: -12 },
+  );
+  assert.deepEqual(merged, { left: -12, top: -6, right: -10, bottom: -12 });
+  assert.deepEqual(mergeControlInsets(null, null), { left: 0, top: 0, right: 0, bottom: 0 });
 });
