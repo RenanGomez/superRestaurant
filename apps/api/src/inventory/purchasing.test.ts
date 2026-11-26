@@ -186,8 +186,8 @@ test("listSuppliers: calls the restaurant-scoped function and maps the rows", as
   assert.deepEqual(database.queries[0]?.parameters, [principal.actorId, restaurantId, false]);
 });
 
-test("listSuppliers: a cashier without catalog.manage is denied before the database", async () => {
-  const { service, database } = serviceFor({ roles: ["cashier"] });
+test("listSuppliers: a kitchen role without catalog.read is denied before the database", async () => {
+  const { service, database } = serviceFor({ roles: ["kitchen"] });
   await assert.rejects(service.listSuppliers(principal, { restaurantId }), code("authorization"));
   assert.equal(database.queries.length, 0);
 });
@@ -353,6 +353,73 @@ test("readPurchaseOrder: reads the detail and parses integer minor costs and lin
 test("readPurchaseOrder: an unknown id is missing", async () => {
   const { service } = serviceFor({ handler: () => [] });
   await assert.rejects(service.readPurchaseOrder(principal, orderId), code("missing"));
+});
+
+test("read isolation: a viewer with only catalog.read lists suppliers, orders and a detail", async () => {
+  const { service } = serviceFor({ roles: ["viewer"] });
+  assert.deepEqual((await service.listSuppliers(principal, { restaurantId })).suppliers, [expectedSupplier]);
+  assert.deepEqual(
+    (await service.listPurchaseOrders(principal, { restaurantId, branchId })).orders,
+    [expectedOrderSummary],
+  );
+  assert.deepEqual(await service.readPurchaseOrder(principal, orderId), {
+    ...expectedOrderSummary,
+    restaurantId,
+    branchId,
+    lines: [{ itemId, itemName: "Harina", quantity: 100, unitCode: "g", unitCostMinor: 250 }],
+  });
+});
+
+test("read isolation: an auditor with only catalog.read reads suppliers, orders and a detail", async () => {
+  const { service } = serviceFor({ roles: ["auditor"] });
+  assert.equal((await service.listSuppliers(principal, { restaurantId })).suppliers.length, 1);
+  assert.equal((await service.listPurchaseOrders(principal, { restaurantId, branchId })).orders.length, 1);
+  assert.equal((await service.readPurchaseOrder(principal, orderId)).id, orderId);
+});
+
+test("write isolation: a viewer with only catalog.read cannot create or edit suppliers or orders", async () => {
+  const createSupplier = serviceFor({ roles: ["viewer"] });
+  await assert.rejects(
+    createSupplier.service.createSupplier(principal, { restaurantId, name: "Distribuidora Sur" }),
+    code("authorization"),
+  );
+  assert.equal(createSupplier.database.queries.length, 0);
+
+  const updateSupplier = serviceFor({ roles: ["viewer"] });
+  await assert.rejects(
+    updateSupplier.service.updateSupplier(principal, supplierId, { name: "Distribuidora Sur" }),
+    code("authorization"),
+  );
+  assert.equal(updateSupplier.database.queries.length, 1);
+
+  const createOrder = serviceFor({ roles: ["viewer"] });
+  await assert.rejects(createOrder.service.createPurchaseOrder(principal, orderCommand), code("authorization"));
+  assert.equal(createOrder.database.queries.length, 0);
+
+  const receiveOrder = serviceFor({ roles: ["viewer"] });
+  await assert.rejects(
+    receiveOrder.service.receivePurchaseOrder(principal, orderId, { warehouseId }),
+    code("authorization"),
+  );
+  assert.equal(receiveOrder.database.queries.length, 1);
+});
+
+test("read isolation: a foreign principal is denied and never receives a foreign order", async () => {
+  const foreignOrderDetailRow = Object.freeze({
+    ...orderDetailRow,
+    restaurant_id: otherRestaurantId,
+    branch_id: otherBranchId,
+  });
+  const { service } = serviceFor({
+    roles: ["viewer"],
+    handler: (sql) => (sql.includes("app_private.read_inventory_purchase_order") ? [foreignOrderDetailRow] : []),
+  });
+  await assert.rejects(service.listSuppliers(principal, { restaurantId: otherRestaurantId }), code("authorization"));
+  await assert.rejects(
+    service.listPurchaseOrders(principal, { restaurantId: otherRestaurantId, branchId: otherBranchId }),
+    code("authorization"),
+  );
+  await assert.rejects(service.readPurchaseOrder(principal, orderId), code("authorization"));
 });
 
 test("receivePurchaseOrder: reads the scope, authorizes and sends the receipt payload", async () => {

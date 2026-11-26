@@ -170,6 +170,25 @@ export async function inventoryApiFlow(): Promise<void> {
       const viewerRead = await context.send("viewer", "GET", `/inventory/items${context.query({ restaurantId })}`);
       expectStatus(viewerRead, 200, "viewer_list_items");
       assert.ok(Array.isArray(viewerRead.body.items));
+      const viewerSupplierList = await context.send("viewer", "GET", `/inventory/suppliers${context.query({ restaurantId })}`);
+      expectStatus(viewerSupplierList, 200, "viewer_list_suppliers");
+      const viewerSupplierRows = viewerSupplierList.body.suppliers as Json[];
+      assert.ok(viewerSupplierRows.some((row) => row.id === supplierId));
+      const viewerSeedItemId = await createItem(context, "Insumo viewer seed", "g", 0);
+      const viewerSeedOrder = await createPurchaseOrder(context, supplierId, [
+        { itemId: viewerSeedItemId, quantity: 1, unitCode: "g", unitCostMinor: 100 },
+      ], `viewer-seed-${randomUUID()}`);
+      const viewerSeedOrderId = String(viewerSeedOrder.orderId);
+      const viewerOrderList = await context.send("viewer", "GET", `/inventory/purchase-orders${context.query({ restaurantId, branchId })}`);
+      expectStatus(viewerOrderList, 200, "viewer_list_orders");
+      const viewerOrderRows = viewerOrderList.body.orders as Json[];
+      assert.ok(viewerOrderRows.some((order) => order.id === viewerSeedOrderId));
+      const viewerOrderDetail = expectStatus(
+        await context.send("viewer", "GET", `/inventory/purchase-orders/${viewerSeedOrderId}`),
+        200,
+        "viewer_order_detail",
+      );
+      assert.equal(viewerOrderDetail.id, viewerSeedOrderId);
       context.check("role_403_viewer");
 
       // 3. Malformed payloads never reach the database: each is a request error.
