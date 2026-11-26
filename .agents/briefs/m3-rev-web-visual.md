@@ -1,6 +1,14 @@
 # Revisión · test/web-inventario-visual (nivel C)
 
-No leas `.agents/reports/*`, no salgas del repo y no ejecutes nada. Responde en ≤ 10 líneas.
+Reglas duras, el motor ya falló dos veces por esto:
+
+- **No escribas archivos en ningún sitio** (ni en el repo, ni en `$env:TEMP`, ni redirecciones con
+  `>`). No hay nada que arreglar: es una revisión.
+- No ejecutes pruebas, ni git que escriba, ni `playwright`.
+- Para leer un archivo usa `git show test/web-inventario-visual:apps/web/e2e/visual/inventario.spec.ts`
+  o la herramienta de lectura, sin guardar nada a disco.
+- El diff completo está incluido al final de este brief.
+- Responde en ≤ 10 líneas, sin preámbulo: veredicto y hallazgos.
 
 Diff: main...test/web-inventario-visual
 
