@@ -142,7 +142,7 @@ function defaultHandler(sql: string): readonly unknown[] {
   if (sql.includes("app_private.inventory_transfer")) {
     return [{ result: { status: "recorded", transferPairId, movements: [transferOut, transferIn] } }];
   }
-  if (sql.includes("app_private.inventory_record_movement")) {
+  if (sql.includes("app_private.inventory_record_manual_movement")) {
     return [{ result: { status: "recorded", movementId, balance: 45 } }];
   }
   if (sql.includes("app_private.list_inventory_movements")) return [movementRow];
@@ -182,20 +182,21 @@ function serviceFor(options: {
   return { service, database };
 }
 
-test("recordMovement: an adjustment calls the ledger function with the server actor and manual source", async () => {
+test("recordMovement: an adjustment calls the manual wrapper with the server actor", async () => {
   const { service, database } = serviceFor();
   const result = await service.recordMovement(principal, adjustment, undefined);
   assert.deepEqual(result, { status: "recorded", movementId, balance: 45 });
   assert.equal(database.queries.length, 1);
-  assert.equal(database.queries[0]?.sql.includes("app_private.inventory_record_movement"), true);
+  assert.equal(database.queries[0]?.sql.includes("app_private.inventory_record_manual_movement"), true);
+  assert.equal(database.queries[0]?.sql.includes("app_private.inventory_record_movement"), false);
   assert.deepEqual(database.queries[0]?.parameters, [
     principal.actorId, restaurantId, branchId, warehouseId, itemId, "adjustment", -5,
-    "Ajuste por conteo", "movement-adjust-1", "inventory_manual", null, null,
+    "Ajuste por conteo", "movement-adjust-1", null,
   ]);
 });
 
 test("recordMovement: a replayed manual key reports duplicate without inventing a balance", async () => {
-  const handler: Handler = (sql) => (sql.includes("app_private.inventory_record_movement")
+  const handler: Handler = (sql) => (sql.includes("app_private.inventory_record_manual_movement")
     ? [{ result: { status: "duplicate", movementId } }]
     : []);
   const { service } = serviceFor({ handler });
