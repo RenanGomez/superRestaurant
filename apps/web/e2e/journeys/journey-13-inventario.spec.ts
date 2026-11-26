@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  formatInventoryMovementQuantity, formatInventoryNumber, formatMinorUnits, formatPercentFromMinor,
+  formatInventoryMovementQuantity, formatInventoryNumber, formatMinorUnits, formatPercentFromMinor, inventoryUnitLabel,
   stockAlertSummary,
 } from "../../src/lib/inventory-ui.ts";
 import { buildLineFraction, effectiveHalvesSetup, emptyHalvesDraft, pickHalfFlavor } from "../../src/lib/line-halves.ts";
@@ -10,7 +10,7 @@ import type {
   InventoryRecipeVersion, InventoryWarehouse, JourneyApi, MenuCatalog, MenuProduct,
 } from "../fixtures/journey-api.ts";
 import {
-  assertAppPage, beforeJourney, expect, test,
+  assertAppPage, beforeJourney, expect, requireActiveShift, test,
 } from "../fixtures/journey-test.ts";
 
 const RECIPE_QUANTITY = 120;
@@ -59,8 +59,9 @@ function mandatorySelections(group: CatalogGroup): readonly { readonly optionId:
 function halvesPlan(
   product: MenuProduct,
   groups: readonly CatalogGroup[],
+  variant: unknown,
 ): { readonly excludedGroupIds: readonly string[]; readonly fraction: NonNullable<ReturnType<typeof buildLineFraction>> } | undefined {
-  const setup = effectiveHalvesSetup(product as never, undefined);
+  const setup = effectiveHalvesSetup(product as never, variant as never);
   if (setup === undefined || setup.flavorGroupId === null) return undefined;
   const flavorGroupId = setup.flavorGroupId;
   const flavorGroup = groups.find((group) => group.groupId === flavorGroupId);
@@ -155,7 +156,7 @@ function sellablePlans(catalog: MenuCatalog): readonly SalePlan[] {
     const groups = groupsFor(product, catalog);
     const pizza = pizzaPlan(product, allGroups);
     if (pizza === undefined) continue;
-    const halves = halvesPlan(product, groups);
+    const halves = halvesPlan(product, groups, (product.variants ?? []).find((candidate) => candidate.active));
     const excludedGroupIds = new Set<string>([
       ...(pizza === null ? [] : [...baseGroupIds(product), ...extraGroupIds(product, allGroups)]),
       ...(halves?.excludedGroupIds ?? []),
@@ -241,13 +242,14 @@ async function ensureDefaultWarehouse(api: JourneyApi): Promise<InventoryWarehou
   }
 }
 
-/** Active product-level recipe (no modifier scope) and its lines, as a restorable snapshot. */
+/** Active product-level recipe (no modifier scope) with no notes, as a restorable snapshot. */
 async function activeProductRecipe(
   api: JourneyApi,
   productId: string,
 ): Promise<InventoryRecipeVersion | undefined> {
   const list = await api.listInventoryRecipes(productId, false);
-  const active = list.recipes.find((recipe) => recipe.active && recipe.modifierId === null);
+  // Publishing cannot carry `notes`, so a recipe with notes is not restorable faithfully.
+  const active = list.recipes.find((recipe) => recipe.active && recipe.modifierId === null && recipe.notes === null);
   return active === undefined ? undefined : api.readInventoryRecipe(active.recipeId);
 }
 
@@ -333,11 +335,7 @@ test("journey 13: la venta descuenta inventario, la alerta muestra el déficit y
   }
   const salePlan = plan;
 
-  const shift = (await api.listActiveShifts()).shifts.find((candidate) => candidate.status === "open");
-  if (shift === undefined) {
-    throw new Error(`No hay turno operativo abierto para el run ${runId}; ábrelo en Caja antes de correr el journey`);
-  }
-  const shiftId = shift.shiftId;
+  const shiftId = await requireActiveShift(api);
 
   const itemName = `Insumo ${runId}`;
   const supplierName = `Proveedor ${runId}`;
@@ -467,7 +465,7 @@ test("journey 13: la venta descuenta inventario, la alerta muestra el déficit y
   const balanceAfterSale = page.locator("tr")
     .filter({ has: page.getByRole("cell", { name: item.name, exact: true }) })
     .filter({ has: page.getByRole("cell", { name: defaultWarehouseName, exact: true }) });
-  await expect(balanceAfterSale).toContainText(formatInventoryNumber(afterSale));
+  await expect(balanceAfterSale.getByRole("cell", { name: new RegExp(`^${formatInventoryNumber(afterSale)} ${inventoryUnitLabel(saleMovement.unitCode)}$`, "u") })).toBeVisible();
 
   // 4. The operator records a real adjustment from the movements tab.
   await page.getByRole("button", { name: "Ajustar", exact: true }).click();
@@ -541,5 +539,5 @@ test("journey 13: la venta descuenta inventario, la alerta muestra el déficit y
   const balanceAfterCancel = page.locator("tr")
     .filter({ has: page.getByRole("cell", { name: item.name, exact: true }) })
     .filter({ has: page.getByRole("cell", { name: defaultWarehouseName, exact: true }) });
-  await expect(balanceAfterCancel).toContainText(formatInventoryNumber(restored));
+  await expect(balanceAfterCancel.getByRole("cell", { name: new RegExp(`^${formatInventoryNumber(restored)} ${inventoryUnitLabel(saleMovement.unitCode)}$`, "u") })).toBeVisible();
 });
