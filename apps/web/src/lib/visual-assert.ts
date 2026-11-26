@@ -39,11 +39,15 @@ export interface EffectiveSize {
   readonly height: number;
 }
 
+/** Browsers resolve insets to px, but a rem/em inset is converted with the default 16px root. */
+export const ASSUMED_ROOT_FONT_SIZE_PX = 16;
+
 function pxValue(value: string): number | null {
-  const match = /^(-?\d+(?:\.\d+)?)px$/.exec(value.trim());
+  const match = /^(-?\d+(?:\.\d+)?)(px|rem|em)$/iu.exec(value.trim());
   if (match === null) return null;
   const parsed = Number.parseFloat(match[1] ?? "");
-  return Number.isFinite(parsed) ? parsed : null;
+  if (!Number.isFinite(parsed)) return null;
+  return (match[2] ?? "px").toLowerCase() === "px" ? parsed : parsed * ASSUMED_ROOT_FONT_SIZE_PX;
 }
 
 function expandInsetShorthand(value: string): readonly [string, string, string, string] | null {

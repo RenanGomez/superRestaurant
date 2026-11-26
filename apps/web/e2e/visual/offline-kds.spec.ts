@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { ensureBranchSelected, expectAuthenticated } from "../helpers.ts";
+import { assertBranchState, ensureBranchSelected, expectAuthenticated, expectFinalRoute } from "../helpers.ts";
 import { assertVisualUi, trackVisualUi } from "./assert-ui.ts";
 
 test.skip(!process.env.E2E_VISUAL, "requiere E2E_VISUAL=1 y entorno local");
@@ -27,8 +27,14 @@ for (const viewport of VIEWPORTS) {
       await page.goto(KDS_OFFLINE_ROUTE);
       expectAuthenticated(page, KDS_OFFLINE_ROUTE);
       await ensureBranchSelected(page, KDS_OFFLINE_ROUTE);
-      await page.waitForLoadState("networkidle").catch(() => undefined);
+      // No silent catch: a screen that never settles must fail the pass, not be skipped.
+      await page.waitForLoadState("networkidle", { timeout: 20_000 });
+      // A redirect to /app or /login would still render a visible `main`; assert the real route
+      // and the branch state so a broken offline screen cannot produce a green visual pass.
+      expectFinalRoute(page, KDS_OFFLINE_ROUTE);
       await expect(page.locator("main").first()).toBeVisible();
+      const mainLength = await assertBranchState(page, KDS_OFFLINE_ROUTE);
+      expect(mainLength).toBeGreaterThan(0);
       await assertVisualUi(page, viewport.label);
     });
   });
