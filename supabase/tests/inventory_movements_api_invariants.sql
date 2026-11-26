@@ -31,7 +31,8 @@ begin
   foreach function_name in array array[
     'app_private.inventory_transfer(uuid,uuid,uuid,uuid,uuid,uuid,integer,text,text,text,uuid)',
     'app_private.list_inventory_movements(uuid,uuid,uuid,uuid,uuid,integer)',
-    'app_private.list_inventory_balances(uuid,uuid,uuid,uuid)'
+    'app_private.list_inventory_balances(uuid,uuid,uuid,uuid)',
+    'app_private.inventory_record_manual_movement(uuid,uuid,uuid,uuid,uuid,text,integer,text,text,uuid)'
   ] loop
     if not pg_catalog.has_function_privilege('app_api', function_name, 'EXECUTE') then
       raise exception 'app_api cannot execute %', function_name;
@@ -41,6 +42,15 @@ begin
         raise exception '% can execute %', state, function_name;
       end if;
     end loop;
+  end loop;
+
+  -- The raw ledger writer is closed to every client role; app_api can only reach it via wrappers.
+  foreach state in array array['app_api', 'authenticated', 'anon', 'service_role', 'public'] loop
+    if pg_catalog.has_function_privilege(state,
+      'app_private.inventory_record_movement(uuid,uuid,uuid,uuid,uuid,text,integer,text,text,text,uuid,uuid,timestamptz,uuid)',
+      'EXECUTE') then
+      raise exception '% can execute inventory_record_movement', state;
+    end if;
   end loop;
 
   insert into auth.users(id, email) values
@@ -82,6 +92,17 @@ begin
   if result ->> 'status' <> 'recorded' then raise exception 'foreign seed not recorded: %', result; end if;
 
   execute 'set local role app_api';
+
+  -- Even calling the raw ledger writer by name, app_api gets an explicit 42501 (not just a missing grant).
+  begin
+    perform app_private.inventory_record_movement(
+      manager, r, b, warehouse_a, item, 'adjustment', 1, 'direct ledger call',
+      'movements-api-direct-ledger', null, null, null, pg_catalog.clock_timestamp(), null);
+    raise exception 'app_api called the raw ledger writer';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '42501' then raise; end if;
+  end;
 
   -- One call moves stock to the other warehouse and leaves two movements with the same pair id.
   result := app_private.inventory_transfer(
@@ -233,12 +254,15 @@ begin
     if state <> '22000' or err_message <> 'INVENTORY_ITEM_UNIT_MISMATCH' then raise; end if;
   end;
 
-  -- A half-written pair from a previous failure is a conflict, never a silent second pair.
+  -- A half-written pair from a previous failure is a conflict, never a silent second pair. The orphan
+  -- leg is seeded as the migration owner because app_api can no longer call the raw ledger.
+  execute 'reset role';
   perform app_private.inventory_record_movement(
     manager, r, b, warehouse_a, item, 'transfer_out', -1, 'orphan leg',
     'movements-api-orphan:out', 'inventory_transfer', gen_random_uuid(), null,
     pg_catalog.clock_timestamp(), null
   );
+  execute 'set local role app_api';
   begin
     perform app_private.inventory_transfer(
       manager, r, b, warehouse_a, warehouse_b, item, 1, 'g', 'orphan leg',
@@ -259,6 +283,38 @@ begin
   if (select coalesce(pg_catalog.sum(quantity), 0)::integer
       from app_private.list_inventory_balances(manager, r, b, null)) <> balance_a
   then raise exception 'transfer replay moved stock'; end if;
+
+  -- A manual adjustment goes through the dedicated wrapper, updates the balance and replays as duplicate.
+  result := app_private.inventory_record_manual_movement(
+    manager, r, b, warehouse_b, item, 'adjustment', 4, 'manual adjustment',
+    'movements-api-manual', null);
+  if result ->> 'status' <> 'recorded' then raise exception 'manual movement not recorded: %', result; end if;
+  if (result ->> 'balance')::integer <> 14 then raise exception 'manual balance = %', result ->> 'balance'; end if;
+  result := app_private.inventory_record_manual_movement(
+    manager, r, b, warehouse_b, item, 'adjustment', 4, 'manual adjustment',
+    'movements-api-manual', null);
+  if result ->> 'status' <> 'duplicate' then raise exception 'manual replay status = %', result; end if;
+  select quantity into balance_b
+  from app_private.list_inventory_balances(manager, r, b, warehouse_b) as bal
+  where bal.item_id = item;
+  if balance_b <> 14 then raise exception 'manual replay changed balance to %', balance_b; end if;
+
+  -- The manual wrapper cannot reach ledger-only kinds such as receipt, and leaves no row behind.
+  begin
+    perform app_private.inventory_record_manual_movement(
+      manager, r, b, warehouse_a, item, 'receipt', 1, 'receipt via manual',
+      'movements-api-manual-receipt', null);
+    raise exception 'manual wrapper accepted a receipt';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '22000' or err_message <> 'INVENTORY_MANUAL_MOVEMENT_KIND_INVALID' then raise; end if;
+  end;
+  if exists (
+    select 1 from app_private.list_inventory_movements(manager, r, b, null, null, 200) as mv
+    where mv.idempotency_key = 'movements-api-manual-receipt'
+  ) then
+    raise exception 'rejected manual movement left a row behind';
+  end if;
 
   execute 'reset role';
 end $test$;

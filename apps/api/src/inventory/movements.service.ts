@@ -28,7 +28,7 @@ const MANUAL_KINDS: ReadonlySet<InventoryMovementKindV1> = new Set([
 const TRANSFER_KINDS: ReadonlySet<InventoryMovementKindV1> = new Set(["transfer_out", "transfer_in"]);
 
 const recordManualSql =
-  "select app_private.inventory_record_movement($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::text,$7::integer,$8::text,$9::text,$10::text,pg_catalog.gen_random_uuid(),$11::uuid,pg_catalog.clock_timestamp(),$12::uuid) as result";
+  "select app_private.inventory_record_manual_movement($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::text,$7::integer,$8::text,$9::text,$10::uuid) as result";
 const transferSql =
   "select app_private.inventory_transfer($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::integer,$8::text,$9::text,$10::text,$11::uuid) as result";
 const listMovementsSql =
@@ -162,8 +162,6 @@ export class MovementsService {
       command.quantityDelta,
       command.reason,
       command.idempotencyKey,
-      "inventory_manual",
-      command.compensatesMovementId,
       deviceId ?? null,
     ]));
     if (rows.length !== 1) throw unavailable();
@@ -265,6 +263,7 @@ function parseMovementRequest(input: unknown, actorId: string): ParsedMovementRe
     return undefined;
   }
   if (parsed === undefined) return undefined;
+  if (parsed.compensatesMovementId !== null) return undefined;
 
   return Object.freeze({
     restaurantId: parsed.restaurantId,

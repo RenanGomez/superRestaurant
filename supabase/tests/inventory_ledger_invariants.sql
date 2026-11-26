@@ -48,7 +48,8 @@ begin
     ) then raise exception 'missing FORCE RLS: %', tbl; end if;
   end loop;
 
-  -- Clients and PUBLIC cannot write the tables; only app_api may execute the writer function.
+  -- Clients and PUBLIC cannot write the tables, and no client role may execute the raw writer; app_api
+  -- reaches the ledger only through per-operation wrappers (e.g. inventory_record_manual_movement).
   foreach tbl in array array['inventory_movements','inventory_balances'] loop
     foreach role_name in array array['authenticated','app_api','anon','service_role','public'] loop
       if pg_catalog.has_table_privilege(role_name::name, 'app.' || tbl, 'INSERT,UPDATE,DELETE,TRUNCATE') then
@@ -59,10 +60,7 @@ begin
   if function_oid is null then
     raise exception 'inventory_record_movement missing';
   end if;
-  if not pg_catalog.has_function_privilege('app_api', function_oid, 'EXECUTE') then
-    raise exception 'app_api cannot execute inventory_record_movement';
-  end if;
-  foreach role_name in array array['authenticated','anon','service_role','public'] loop
+  foreach role_name in array array['app_api','authenticated','anon','service_role','public'] loop
     if pg_catalog.has_function_privilege(role_name, function_oid, 'EXECUTE') then
       raise exception '% can execute inventory_record_movement', role_name;
     end if;
