@@ -93,6 +93,17 @@ begin
 
   execute 'set local role app_api';
 
+  -- Even calling the raw ledger writer by name, app_api gets an explicit 42501 (not just a missing grant).
+  begin
+    perform app_private.inventory_record_movement(
+      manager, r, b, warehouse_a, item, 'adjustment', 1, 'direct ledger call',
+      'movements-api-direct-ledger', null, null, null, pg_catalog.clock_timestamp(), null);
+    raise exception 'app_api called the raw ledger writer';
+  exception when others then
+    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+    if state <> '42501' then raise; end if;
+  end;
+
   -- One call moves stock to the other warehouse and leaves two movements with the same pair id.
   result := app_private.inventory_transfer(
     manager, r, b, warehouse_a, warehouse_b, item, 10, 'g', 'transfer to kitchen',

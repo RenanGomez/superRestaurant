@@ -263,6 +263,7 @@ function parseMovementRequest(input: unknown, actorId: string): ParsedMovementRe
     return undefined;
   }
   if (parsed === undefined) return undefined;
+  if (parsed.compensatesMovementId !== null) return undefined;
 
   return Object.freeze({
     restaurantId: parsed.restaurantId,

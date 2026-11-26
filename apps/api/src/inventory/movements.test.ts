@@ -211,6 +211,15 @@ test("recordMovement: waste without a reason is rejected before the database", a
   assert.equal(database.queries.length, 0);
 });
 
+test("recordMovement: a manual compensation reference is rejected before the database", async () => {
+  const { service, database } = serviceFor();
+  await assert.rejects(
+    service.recordMovement(principal, { ...adjustment, compensatesMovementId: movementId }, undefined),
+    code("request"),
+  );
+  assert.equal(database.queries.length, 0);
+});
+
 test("recordMovement: a client-supplied actorId is ignored, not trusted", async () => {
   const { service, database } = serviceFor();
   await assert.rejects(
