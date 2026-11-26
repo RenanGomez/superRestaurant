@@ -152,8 +152,18 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   `begin;/commit;` + copias pineadas pre-`20261102000100`).
 - **2026-11-26 · P2 verificador historico de Capture** — resuelto en PR #130 (modo local desechable +
   fixture pineado previo a `20260917000100`).
-- **2026-11-26 · P3 lecturas de compras con `catalog.manage`** — resuelto en PR #131 (servicio y SQL con
-  `catalog.read`; escrituras intactas).
+- **2026-11-26 · P1 release purgaba evidencia financiera rechazada** — resuelto en #132: `release()`
+  retiene el almacén mientras quede algo que el motor no pueda compactar; prueba con `cash_collect`
+  rechazado.
+- **2026-11-26 · P1/P2 purga de scope conservaba cursor y podía borrar otro scope** — resuelto en #133:
+  el scope purgado queda `resync_required` con cursor nulo, outbox intacto, y el wipe total exige que no
+  quede nada en ningún scope.
+- **2026-11-26 · P2 `deviceId` de recepción en `sessionStorage`** — resuelto en #134: persistencia por
+  perfil con helper puro; la validación contra el registro queda como `o0-device-registry` (la función
+  `app_private.sync_device_state` ya existe y está concedida a `app_api`).
+- **2026-11-26 · P2 `o0-wire` (cableado de pruebas de la Ola 0)** — cerrado en #85; el líder productivo
+  pasa a `o0-leader-wire`.
+- **2026-11-26 · P3 `lists` de compras con `catalog.manage`** — cerrado en #131 junto con la migración.
 - **2026-11-26 · P2 `app_api` con `EXECUTE` en `inventory_record_movement`** — cerrado en #122 con
   `inventory_record_manual_movement`.
 - **2026-11-26 · P3 `items.module.ts` huerfano** — eliminado en #115.
