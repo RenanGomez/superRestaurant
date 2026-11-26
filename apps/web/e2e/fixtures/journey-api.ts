@@ -151,6 +151,7 @@ export interface InventoryWarehouse {
   readonly branchId: string;
   readonly name: string;
   readonly active: boolean;
+  readonly isDefault: boolean;
 }
 
 export interface InventoryBalance {
@@ -240,6 +241,24 @@ export interface InventoryRecipeVersion {
   readonly lines: readonly InventoryRecipeLine[];
 }
 
+export interface InventoryRecipeSummary {
+  readonly recipeId: string;
+  readonly restaurantId: string;
+  readonly productId: string;
+  readonly modifierId: string | null;
+  readonly version: number;
+  readonly active: boolean;
+  readonly notes: string | null;
+  readonly createdAt: string;
+}
+
+export interface InventoryRecipeList {
+  readonly schemaVersion: 1;
+  readonly restaurantId: string;
+  readonly productId: string;
+  readonly recipes: readonly InventoryRecipeSummary[];
+}
+
 export interface CreateInventoryItemInput {
   readonly name: string;
   readonly unitCode: InventoryUnit;
@@ -271,12 +290,24 @@ export interface InventoryPizzaLine {
 export interface CounterSaleInput {
   readonly catalogVersion: string;
   readonly currency: string;
+  readonly fraction?: InventoryLineFraction | null;
   readonly modifierGroups: readonly InventoryModifierGroup[];
   readonly orderId: string;
   readonly pizza?: InventoryPizzaLine | null;
   readonly productId: string;
   readonly shiftId: string;
   readonly variantId: string | null;
+}
+
+/** Half-and-half line payload (fraction model); mirrors `LineFractionV1`. */
+export interface InventoryLineFraction {
+  readonly geometry: "halves";
+  readonly slots: readonly {
+    readonly fraction: "half-a" | "half-b";
+    readonly flavorOptionId: string | null;
+    readonly extraOptionIds: readonly string[];
+    readonly excludedIngredientIds: readonly string[];
+  }[];
 }
 
 export interface CounterSaleResult {
@@ -532,6 +563,23 @@ export class JourneyApi {
     })}`);
   }
 
+  public createInventoryWarehouse(input: {
+    readonly name: string;
+    readonly active?: boolean;
+    readonly isDefault?: boolean;
+  }): Promise<InventoryWarehouse> {
+    return this.request("POST", "/inventory/warehouses", {
+      ...input, branchId: this.scope.branchId, restaurantId: this.scope.restaurantId,
+    });
+  }
+
+  public updateInventoryWarehouse(
+    id: string,
+    patch: { readonly name?: string; readonly active?: boolean; readonly isDefault?: boolean },
+  ): Promise<InventoryWarehouse> {
+    return this.request("PATCH", `/inventory/warehouses/${encodeURIComponent(id)}`, patch);
+  }
+
   public listInventorySuppliers(): Promise<{ readonly suppliers: readonly InventorySupplier[] }> {
     return this.request("GET", `/inventory/suppliers?${new URLSearchParams({ restaurantId: this.scope.restaurantId })}`);
   }
@@ -569,6 +617,21 @@ export class JourneyApi {
     lines: readonly InventoryRecipeLine[],
   ): Promise<InventoryRecipeVersion> {
     return this.request("POST", "/inventory/recipes", { lines, productId, restaurantId: this.scope.restaurantId });
+  }
+
+  public listInventoryRecipes(
+    productId: string,
+    includeInactive = false,
+  ): Promise<InventoryRecipeList> {
+    return this.request("GET", `/inventory/recipes?${new URLSearchParams({
+      includeInactive: String(includeInactive), productId, restaurantId: this.scope.restaurantId,
+    })}`);
+  }
+
+  public readInventoryRecipe(recipeId: string): Promise<InventoryRecipeVersion> {
+    return this.request("GET", `/inventory/recipes/${encodeURIComponent(recipeId)}?${new URLSearchParams({
+      restaurantId: this.scope.restaurantId,
+    })}`);
   }
 
   public listInventoryBalances(): Promise<{ readonly balances: readonly InventoryBalance[] }> {
@@ -614,6 +677,7 @@ export class JourneyApi {
     const attentionLeaseId = created.detail.attentionLeaseId;
     if (attentionLeaseId === null) throw new Error("La captura no expuso un lease de atención");
     const pizza = input.pizza ?? undefined;
+    const fraction = input.fraction ?? undefined;
     const planned = await this.request<CaptureWorkspace>("POST", "/captures/selection-plan", {
       ...this.audit(), schemaVersion: 1, scope: this.scope, captureDraftId,
       expectedVersion: created.detail.version, attentionLeaseId,
@@ -622,6 +686,7 @@ export class JourneyApi {
         lines: [{
           lineId: randomUUID(), productId: input.productId, variantId: input.variantId,
           quantity: 1, modifierGroups: input.modifierGroups, note: null,
+          ...(fraction === undefined ? {} : { fraction }),
           ...(pizza === undefined ? {} : { pizza }),
         }],
       },
