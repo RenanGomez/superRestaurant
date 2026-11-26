@@ -3,12 +3,13 @@
 import { useEffect } from "react";
 import type { BranchScope } from "@super-restaurant/shared-types";
 
+import { setSyncFollowerNotice, startOfflineRuntime } from "../lib/offline/runtime-sync-runner";
+import { acquireSyncLeader } from "../lib/offline/sync-leader";
 import { createWebSyncTransport } from "../lib/offline/sync-transport";
-import { openWebSyncBridge, syncDeviceIdForActor, type WebSyncBridgeHandle } from "../lib/offline/web-sync-bridge";
+import { openWebSyncBridge, syncDeviceIdForActor } from "../lib/offline/web-sync-bridge";
 
 const DEVICE_ID_STORAGE_KEY = "sr-web-device-id";
 const DEVICE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const SYNC_INTERVAL_MS = 60_000;
 /**
  * The same-origin `/api/sync/*` handler authenticates with the httpOnly session
  * cookie. This placeholder satisfies the transport's non-empty-token contract and
@@ -37,11 +38,11 @@ export interface OfflineRuntimeMountProps {
 }
 
 /**
- * Hidden client boundary of the authenticated shell. It opens the durable offline
- * bridge once the branch scope and actor are known, registers the two global ports
- * (`OfflinePosPort` + `WebSyncBridge`) so the sync bar shows the real queue, and
- * releases the store on unmount — which is what a sign-out triggers. Release purges
- * the local database only when nothing is unconfirmed.
+ * Hidden client boundary of the authenticated shell. It elects one syncing tab per device with
+ * the Web Locks API, opens the durable offline bridge only for the leader, registers the two
+ * global ports (`OfflinePosPort` + `WebSyncBridge`) so the sync bar shows the real queue, and
+ * releases the store on unmount — which is what a sign-out triggers. Release applies the
+ * sign-out purge policy and keeps any retained financial evidence.
  */
 export function OfflineRuntimeMount({ scope, actorId }: OfflineRuntimeMountProps): null {
   const restaurantId = scope?.restaurantId;
@@ -56,67 +57,38 @@ export function OfflineRuntimeMount({ scope, actorId }: OfflineRuntimeMountProps
     // be per (tablet, actor). Derived with the bridge's deterministic hash; the browser
     // identity in localStorage stays shared and the store stays per actor.
     const deviceId = syncDeviceIdForActor(baseDeviceId, userId);
-
     const activeScope = Object.freeze({ branchId, restaurantId });
-    let disposed = false;
-    let released = false;
-    let handle: WebSyncBridgeHandle | undefined;
-    let interval: ReturnType<typeof setInterval> | undefined;
 
     const transport = createWebSyncTransport({
       accessToken: () => Promise.resolve(SAME_ORIGIN_PROXY_TOKEN),
       apiBaseUrl: window.location.origin,
-      canSend: () => !released,
+      canSend: () => controller.isActive,
       paths: { devices: "/api/sync/devices", pull: "/api/sync/pull", push: "/api/sync/push", snapshot: "/api/sync/snapshot" },
       timeoutMs: 30_000,
     });
 
+    const controller = startOfflineRuntime({
+      deviceId,
+      scope: activeScope,
+      acquireLeader: () => acquireSyncLeader(deviceId),
+      openBridge: () => openWebSyncBridge({ actorId: userId, deviceId, transport }),
+      reportFollower: setSyncFollowerNotice,
+    });
+
     const online = (): void => {
-      handle?.setConnectivity("online");
-      if (handle !== undefined) void handle.syncNow(activeScope);
+      controller.setConnectivity("online");
+      controller.syncNow();
     };
     const offline = (): void => {
-      handle?.setConnectivity("offline");
+      controller.setConnectivity("offline");
     };
     window.addEventListener("online", online);
     window.addEventListener("offline", offline);
 
-    void (async (): Promise<void> => {
-      try {
-        const opened = await openWebSyncBridge({
-          actorId: userId,
-          deviceId,
-          transport,
-        });
-        if (disposed) {
-          await opened.release();
-          return;
-        }
-        handle = opened;
-        opened.setConnectivity(typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "online");
-        opened.register(activeScope);
-        await opened.syncNow(activeScope);
-        interval = setInterval(() => {
-          if (typeof navigator !== "undefined" && !navigator.onLine) return;
-          void opened.syncNow(activeScope);
-        }, SYNC_INTERVAL_MS);
-      } catch {
-        // No IndexedDB / no Web Locks: the UI stays honest and reports storage unavailable.
-      }
-    })();
-
     return () => {
-      disposed = true;
-      released = true;
-      if (interval !== undefined) clearInterval(interval);
       window.removeEventListener("online", online);
       window.removeEventListener("offline", offline);
-      const current = handle;
-      handle = undefined;
-      if (current !== undefined) {
-        current.unregister();
-        void current.release();
-      }
+      controller.stop();
     };
   }, [branchId, restaurantId, userId]);
 

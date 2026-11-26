@@ -69,7 +69,8 @@ import {
   type WebSyncBridgeActionResult,
   type WebSyncUiSnapshot,
 } from "../sync-ui";
-import { WebIndexedDbSyncStorage } from "./sync-store";
+import { WebIndexedDbSyncStorage, type WebSyncPurgeOptions, type WebSyncPurgeOutcome } from "./sync-store";
+import { decideOfflinePurge, type OfflinePurgeAction, type OfflinePurgeEvent } from "./sync-purge";
 
 /** Default IndexedDB database name; tests and secondary tabs may override it. */
 export const WEB_SYNC_DATABASE_NAME = "sr_sync_v1";
@@ -108,7 +109,9 @@ export interface WebSyncBridgeOpenOptions {
 }
 
 export interface WebSyncReleaseOutcome {
-  /** True only when every persisted outbox entry was compactable and the store was deleted. */
+  /** Purge action the policy chose for the event that sealed/released the bridge. */
+  readonly action: OfflinePurgeAction;
+  /** True only when the local device state was actually removed. */
   readonly purged: boolean;
   /**
    * Number of persisted events retained as evidence because the engine may not compact
@@ -159,6 +162,23 @@ const RELEASE_COMPACTION_CONTEXT = Object.freeze({
   olderThanMs: Number.POSITIVE_INFINITY,
   referencedEventIds: new Set<string>(),
 });
+
+/** Administrative operations only the encrypted IndexedDB store exposes. Tests may inject a plain port. */
+interface PurgeableWebStorage extends DurableSyncStoragePort {
+  lock(): Promise<void>;
+  purge(): Promise<void>;
+  purgeAll(options?: WebSyncPurgeOptions): Promise<WebSyncPurgeOutcome>;
+  close(): void;
+}
+
+function purgeableStorage(storage: DurableSyncStoragePort): PurgeableWebStorage | undefined {
+  const candidate = storage as Partial<PurgeableWebStorage>;
+  return typeof candidate.lock === "function"
+    && typeof candidate.purge === "function"
+    && typeof candidate.purgeAll === "function"
+    ? candidate as PurgeableWebStorage
+    : undefined;
+}
 
 function protocolConnectivity(): SyncConnectivityStateV1 {
   return typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "online";
@@ -313,6 +333,12 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   let releasePromise: Promise<WebSyncReleaseOutcome> | undefined;
   /** Latched at the first synchronous step of `release()`; blocks new commits. */
   let closing = false;
+  /** Latched when the server revoked this device/actor: the store is locked and sealed for good. */
+  let sealed = false;
+  /** Outcome of the revocation purge, returned by `release()` instead of counting a locked store. */
+  let sealedOutcome: WebSyncReleaseOutcome | null = null;
+  /** Last readable outbox per scope, captured before sealing so the UI can show retained evidence. */
+  const retainedEvents = new Map<string, readonly SyncUiEventItem[]>();
   let activeCommits = 0;
   const commitWaiters: Array<() => void> = [];
   /** In-memory only: a registered scope survives for this bridge session, never on disk. */
@@ -343,6 +369,19 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
 
   const refresh = async (scope: BranchScope): Promise<void> => {
     const key = scopeKey(scope);
+    if (sealed) {
+      // The store is locked on purpose: it stays readable as a sealed report, never as a queue.
+      snapshots.set(key, Object.freeze({
+        ...EMPTY_WEB_SYNC_SNAPSHOT,
+        events: retainedEvents.get(key) ?? Object.freeze([]),
+        lastConfirmedSyncAt,
+        scopeRevoked: true,
+        storageReady: true,
+        syncing: false,
+      }));
+      notify();
+      return;
+    }
     try {
       const [outbox, status, replica] = await Promise.all([
         engine.getOutbox(scope),
@@ -404,6 +443,10 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   const syncNow = (scope: BranchScope): Promise<void> => {
     if (syncPromise !== undefined) return syncPromise;
     const run = (async (): Promise<void> => {
+      if (sealed) {
+        await refresh(scope);
+        return;
+      }
       syncing = true;
       notify();
       try {
@@ -423,6 +466,7 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
         const result = await engine.sync(scope);
         if (result.push.revoked || result.pull.status === "revoked") {
           connectivityRef.current = "sync_blocked";
+          await sealAfterRevocation(scope);
         } else if (
           result.push.failureCode !== null
           || result.pull.status === "failed"
@@ -433,8 +477,12 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
           connectivityRef.current = "online";
           lastConfirmedSyncAt = nowIso();
         }
-      } catch {
+      } catch (error) {
         connectivityRef.current = connectivityRef.current === "offline" ? "offline" : "degraded";
+        if (error instanceof SyncEngineError && error.code === "SCOPE_REVOKED") {
+          connectivityRef.current = "sync_blocked";
+          await sealAfterRevocation(scope);
+        }
       } finally {
         syncing = false;
         await refresh(scope);
@@ -453,6 +501,11 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
     // nothing can be added to a store that is about to be deleted.
     if (closing) {
       return Object.freeze({ code: "STORAGE_CLOSED", committed: false, eventId: null });
+    }
+    if (sealed) {
+      // The server revoked this device/actor: the store is locked and no new evidence may
+      // enter it. The caller has to sign in again before capturing offline.
+      return Object.freeze({ code: "SCOPE_REVOKED", committed: false, eventId: null });
     }
     if (input.deviceId !== options.deviceId) {
       return Object.freeze({ code: "DEVICE_MISMATCH", committed: false, eventId: null });
@@ -518,7 +571,7 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
 
   const retryPending = async (scope: BranchScope): Promise<WebSyncBridgeActionResult> => {
     await syncNow(scope);
-    const blocked = connectivityRef.current === "sync_blocked";
+    const blocked = sealed || connectivityRef.current === "sync_blocked";
     return Object.freeze({
       code: blocked ? "SYNC_BLOCKED" : null,
       ok: !blocked,
@@ -527,6 +580,10 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   };
 
   const requestResync = async (scope: BranchScope): Promise<WebSyncBridgeActionResult> => {
+    if (sealed) {
+      await refresh(scope);
+      return Object.freeze({ code: "SYNC_BLOCKED", ok: false });
+    }
     try {
       await engine.resetScopeForResync(scope);
       const outcome = options.transport.pullSnapshot === undefined
@@ -598,9 +655,108 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
   };
 
   /**
-   * Seals the bridge against new commits, then deletes the local database only when every
-   * persisted outbox entry is compactable. Any non-compactable entry — pending, blocked,
-   * in review, or financial in any state including `rejected` — is retained as evidence.
+   * Deletes the local device state. The caller already proved the outbox has no
+   * non-compactable evidence; a custom purge port (tests) wins over the owned store.
+   */
+  const deleteStore = async (): Promise<boolean> => {
+    try {
+      if (options.purgeStore !== undefined) {
+        await options.purgeStore();
+        return true;
+      }
+      if (ownedStorage !== undefined) {
+        await ownedStorage.purge();
+        return true;
+      }
+      if (options.closeStorage !== undefined) {
+        await options.closeStorage();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * Applies the purge policy for an offline event. The outbox is re-read right before the
+   * destructive step and an unreadable store (`-1`) counts as evidence, so nothing is
+   * destroyed that could not be inspected first.
+   */
+  const applyOfflinePurge = async (event: OfflinePurgeEvent): Promise<WebSyncReleaseOutcome> => {
+    let unconfirmed = await countUnconfirmed();
+    if (unconfirmed === 0) unconfirmed = await countUnconfirmed();
+    const decision = decideOfflinePurge({ event, hasFinancialEvidence: unconfirmed !== 0 });
+    const retained = Math.max(0, unconfirmed);
+    const keep = (): WebSyncReleaseOutcome => Object.freeze({
+      action: decision.action,
+      purged: false,
+      retainedUnconfirmed: retained,
+    });
+
+    if (decision.action === "purge_all") {
+      return Object.freeze({ action: decision.action, purged: await deleteStore(), retainedUnconfirmed: 0 });
+    }
+
+    const purgeable = storage === undefined ? undefined : purgeableStorage(storage);
+    if (purgeable === undefined) return keep();
+
+    if (decision.action === "lock_and_keep") {
+      try { await purgeable.lock(); } catch { return keep(); }
+      return keep();
+    }
+
+    if (decision.action === "lock_and_purge_replica") {
+      try {
+        // Seal first: a commit landing between the lock and the purge must fail instead of
+        // surviving in a store whose replica is already gone.
+        await purgeable.lock();
+        const outcome = await purgeable.purgeAll({ allowLocked: true, retainEvidenceUnlocked: true });
+        return Object.freeze({
+          action: decision.action,
+          purged: outcome.wiped,
+          retainedUnconfirmed: outcome.retainedOutboxCount,
+        });
+      } catch {
+        return keep();
+      }
+    }
+
+    try {
+      const outcome = await purgeable.purgeAll();
+      return Object.freeze({
+        action: decision.action,
+        purged: outcome.wiped,
+        retainedUnconfirmed: outcome.retainedOutboxCount,
+      });
+    } catch {
+      return keep();
+    }
+  };
+
+  /**
+   * The server revoked this device/actor (`AUTH_REVOKED`, `DEVICE_REVOKED`). The engine has
+   * already moved pending financial events to manual review; this keeps that evidence,
+   * drops the replica and locks the store so the revoked credential cannot read it again.
+   */
+  const sealAfterRevocation = async (scope: BranchScope): Promise<void> => {
+    if (sealed) return;
+    const key = scopeKey(scope);
+    try {
+      retainedEvents.set(key, Object.freeze((await engine.getOutbox(scope)).map(toEventItem)));
+    } catch {
+      retainedEvents.set(key, Object.freeze([]));
+    }
+    sealed = true;
+    connectivityRef.current = "sync_blocked";
+    sealedOutcome = await applyOfflinePurge("auth_revoked");
+    notify();
+  };
+
+  /**
+   * Seals the bridge against new commits, then applies the sign-out purge policy. Any
+   * non-compactable entry — pending, blocked, in review, or financial in any state
+   * including `rejected` — is retained as evidence and the replica is dropped instead.
    */
   const release = (): Promise<WebSyncReleaseOutcome> => {
     if (releasePromise !== undefined) return releasePromise;
@@ -618,36 +774,18 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
       if (activeCommits > 0) {
         await new Promise<void>((resolve) => commitWaiters.push(resolve));
       }
-      let unconfirmed = await countUnconfirmed();
-
-      // Re-read immediately before the destructive step: a commit that persisted
-      // between the first check and now must win, never be silently deleted.
-      if (unconfirmed === 0) unconfirmed = await countUnconfirmed();
-
-      // Only a store with no non-compactable evidence may be deleted; rejected
-      // financial entries are evidence too, even though they are terminal.
-      if (unconfirmed === 0) {
-        try {
-          if (options.purgeStore !== undefined) {
-            await options.purgeStore();
-          } else if (ownedStorage !== undefined) {
-            await ownedStorage.purge();
-          } else if (options.closeStorage !== undefined) {
-            await options.closeStorage();
-          }
-          return Object.freeze({ purged: true, retainedUnconfirmed: 0 });
-        } catch {
-          return Object.freeze({ purged: false, retainedUnconfirmed: 0 });
-        }
-      }
-
+      // A revoked bridge already locked and purged; re-running the policy would only
+      // count an intentionally unreadable (locked) store.
+      const outcome = sealed && sealedOutcome !== null
+        ? sealedOutcome
+        : await applyOfflinePurge("sign_out");
       try {
         if (ownedStorage !== undefined) ownedStorage.close();
         else if (options.closeStorage !== undefined) await options.closeStorage();
       } catch {
-        // A close failure does not change the fact that pending evidence was kept.
+        // A close failure does not change the purge outcome already computed from disk.
       }
-      return Object.freeze({ purged: false, retainedUnconfirmed: Math.max(0, unconfirmed) });
+      return outcome;
     })();
     releasePromise = run;
     void run.catch(() => {

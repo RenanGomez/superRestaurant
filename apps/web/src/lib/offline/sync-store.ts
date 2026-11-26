@@ -19,6 +19,20 @@ export interface WebSyncPurgeOutcome {
   readonly retainedOutboxCount: number;
   readonly retainedScopeCount: number;
 }
+export interface WebSyncPurgeOptions {
+  /**
+   * Applies the purge on a locked store. Only the caller that locked it on purpose may set
+   * this (a revocation decision); every other purge keeps failing with `STORAGE_LOCKED`.
+   */
+  readonly allowLocked?: boolean;
+  /**
+   * Leaves the retained evidence readable after a revocation purge. The lock exists to stop
+   * the revoked credential from reading the *replica*; once the replica is gone, a permanently
+   * locked store would make the only copy of the unsent financial evidence unrecoverable.
+   */
+  readonly retainEvidenceUnlocked?: boolean;
+}
+/** Only transient load failures are retryable; a destructive purge no longer queues a cross-tab deletion. */
 export class WebSyncStorageError extends Error {
   public readonly retryable: boolean;
   public constructor(public readonly code: string) { super(code); this.name = "WebSyncStorageError"; this.retryable = code === "STORAGE_LOAD_FAILED"; }
@@ -61,8 +75,6 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     private readonly db: IDBDatabase,
     private readonly crypto: Crypto,
     private readonly locks: LockManager,
-    private readonly factory: IDBFactory,
-    private readonly databaseName: string,
   ) {}
 
   public static async open(deviceId: string, options: { databaseName?: string; indexedDB?: IDBFactory; crypto?: Crypto; locks?: LockManager } = {}): Promise<WebIndexedDbSyncStorage> {
@@ -74,23 +86,26 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     const open = factory.open(databaseName, 1);
     open.onupgradeneeded = () => { for (const name of [META, SLOTS, KEYS]) if (!open.result.objectStoreNames.contains(name)) open.result.createObjectStore(name); };
     const db = await request(open);
-    return new WebIndexedDbSyncStorage(deviceId, db, crypto, locks, factory, databaseName);
+    return new WebIndexedDbSyncStorage(deviceId, db, crypto, locks);
   }
   public close(): void { this.db.close(); }
 
   /**
-   * Best-effort destructive purge used only when the caller proved the outbox has no
-   * unconfirmed event. The connection is closed first; a blocked deletion (another
-   * tab still holds the database) is reported as a failure so the caller never claims
-   * the local store was cleared when it was not.
+   * Destructive purge used only when the caller proved the outbox has no unconfirmed event.
+   * It deletes this device's metadata, both slots and every key under the same Web Lock that
+   * serializes commits. It deliberately does not call `deleteDatabase`: a cross-tab deletion
+   * is reported as blocked while the request stays queued, so the store could report failure
+   * and then disappear with another tab's later commit. The empty database file may remain;
+   * the device holds no state in it.
    */
   public purge(): Promise<void> {
-    this.db.close();
-    return new Promise<void>((resolve, reject) => {
-      const deletion = this.factory.deleteDatabase(this.databaseName);
-      deletion.onsuccess = () => resolve();
-      deletion.onerror = () => reject(new WebSyncStorageError("STORAGE_COMMIT_FAILED"));
-      deletion.onblocked = () => reject(new WebSyncStorageError("STORAGE_COMMIT_FAILED"));
+    return this.exclusive(async () => {
+      try {
+        const meta = await this.read<Meta>(META, this.deviceId);
+        if (meta?.quarantined) throw new WebSyncStorageError("STORAGE_QUARANTINED");
+        await this.wipeRows();
+        this.db.close();
+      } catch (error) { throw storageError(error); }
     });
   }
   private exclusive<T>(work: () => Promise<T>): Promise<T> { return this.locks.request(`sr-sync:${this.deviceId}`, { mode: "exclusive" }, work); }
@@ -241,7 +256,11 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     while (await this.read<CryptoKey>(KEYS, [this.deviceId, version])) version += 1;
     return version;
   }
-  private async reencrypt(state: DurableSyncState, meta: Meta): Promise<{ readonly generation: number; readonly keyVersion: number }> {
+  private async reencrypt(
+    state: DurableSyncState,
+    meta: Meta,
+    seal: { readonly locked?: boolean } = {},
+  ): Promise<{ readonly generation: number; readonly keyVersion: number }> {
     const binding = scopeBinding(state);
     const keyVersion = await this.nextKeyVersion(meta);
     const generation = meta.generation + 1;
@@ -255,7 +274,10 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     try {
       tx.objectStore(KEYS).put(key, [this.deviceId, keyVersion]);
       tx.objectStore(SLOTS).put({ ciphertext, iv, generation, keyVersion, scope: binding } satisfies Slot, [this.deviceId, current.activeSlot]);
-      tx.objectStore(META).put({ ...current, generation, keyVersion, scope: binding }, this.deviceId);
+      tx.objectStore(META).put(
+        { ...current, generation, keyVersion, scope: binding, ...(seal.locked === undefined ? {} : { locked: seal.locked }) },
+        this.deviceId,
+      );
       tx.objectStore(KEYS).delete([this.deviceId, meta.keyVersion]);
     } catch (error) { tx.abort(); await done.catch(() => undefined); throw error; }
     await done;
@@ -300,25 +322,29 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
   private purgeReplica(
     shouldRemove: (entity: ReplicaEntity) => boolean,
     resetScope: ((scope: SyncScopeInput) => boolean) | null,
+    options: WebSyncPurgeOptions = {},
   ): Promise<WebSyncPurgeOutcome> {
     return this.exclusive(async () => {
       try {
         const meta = await this.read<Meta>(META, this.deviceId);
         if (!meta) { await this.wipeRows(); return WIPED_OUTCOME; }
         if (meta.quarantined) throw new WebSyncStorageError("STORAGE_QUARANTINED");
-        if (meta.locked) throw new WebSyncStorageError("STORAGE_LOCKED");
+        // A locked store is unreadable by design; only a revocation decision may purge it,
+        // because that is exactly the moment the replica must stop being readable.
+        if (meta.locked && options.allowLocked !== true) throw new WebSyncStorageError("STORAGE_LOCKED");
         const state = await this.decrypt(meta);
         const replica = state.replica.filter((entity) => !shouldRemove(entity));
         const removedReplicaCount = state.replica.length - replica.length;
-        // Keep the purged scope registered so its retained outbox stays valid, but force it to
-        // resync: a surviving cursor would keep pulling a tenant the device already left.
-        const scopes = resetScope === null
-          ? state.scopes
-          : state.scopes.map((item) => resetScope(item) ? { ...item, status: "resync_required" as const, pullCursor: null } : item);
+        // A purge never keeps a surviving cursor: the scope is forced to resync from scratch,
+        // otherwise the engine resumes pulling from a cursor the device may no longer own.
+        const scopes = state.scopes.map((item) => (
+          resetScope === null || resetScope(item) ? { ...item, status: "resync_required" as const, pullCursor: null } : item
+        ));
         const parsed = parseDurableState({ ...state, replica, scopes }, this.deviceId);
         if (!parsed.ok) throw new WebSyncStorageError("STATE_CORRUPT");
         // Only wipe when nothing remains anywhere: a wipe also deletes other scopes' replica,
-        // cursors and registration. `purgeAll` covers every scope, so it may wipe on an empty store.
+        // cursors and registration. `purgeAll` covers every scope and clears every cursor,
+        // so it may wipe once the replica and the outbox are empty.
         const cursorRetained = parsed.value.scopes.some((item) => item.pullCursor !== null);
         if (parsed.value.outbox.length === 0 && parsed.value.replica.length === 0 && (resetScope === null || !cursorRetained)) {
           await this.wipeRows();
@@ -327,7 +353,11 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
         const retainedScopes = new Set<string>();
         for (const entity of parsed.value.replica) retainedScopes.add(`${entity.restaurantId}/${entity.branchId}`);
         for (const entry of parsed.value.outbox) retainedScopes.add(`${entry.restaurantId}/${entry.branchId}`);
-        const next = await this.reencrypt(parsed.value, meta);
+        const next = await this.reencrypt(
+          parsed.value,
+          meta,
+          options.retainEvidenceUnlocked === true ? { locked: false } : {},
+        );
         this.generation = next.generation;
         return Object.freeze({
           wiped: false,
@@ -338,18 +368,20 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
       } catch (error) { throw storageError(error); }
     });
   }
-  public purgeForScope(scope: SyncScopeInput): Promise<WebSyncPurgeOutcome> {
+  public purgeForScope(scope: SyncScopeInput, options: WebSyncPurgeOptions = {}): Promise<WebSyncPurgeOutcome> {
     const restaurantId = normalizeId(scope.restaurantId);
     const branchId = normalizeId(scope.branchId);
     const sameScope = (item: SyncScopeInput) => normalizeId(item.restaurantId) === restaurantId && normalizeId(item.branchId) === branchId;
-    return this.purgeReplica((entity) => sameScope(entity), sameScope);
+    return this.purgeReplica((entity) => sameScope(entity), sameScope, options);
   }
   /**
    * Total purge. Wipes slots, keys and metadata when the outbox retains no evidence; otherwise
-   * it degrades to `purge_replica_keep_outbox`: the replica is dropped and the retained outbox is
-   * re-encrypted under a fresh key. Retained financial evidence is never deleted.
+   * it degrades to `purge_replica_keep_outbox`: the replica is dropped, every cursor is cleared
+   * (the next session resyncs from scratch) and the retained outbox is re-encrypted under a
+   * fresh key. Retained financial evidence is never deleted. `allowLocked` is reserved for a
+   * revocation decision, which locks first and then drops the replica.
    */
-  public purgeAll(): Promise<WebSyncPurgeOutcome> {
-    return this.purgeReplica(() => true, null);
+  public purgeAll(options: WebSyncPurgeOptions = {}): Promise<WebSyncPurgeOutcome> {
+    return this.purgeReplica(() => true, null, options);
   }
 }

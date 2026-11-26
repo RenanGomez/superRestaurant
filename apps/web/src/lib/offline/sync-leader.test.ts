@@ -79,7 +79,8 @@ test("dos adquirentes del mismo deviceId: solo el primero lidera y el relevo lle
   assert.equal(secondResolved, true);
   assert.equal(first.isLeader, false);
   assert.equal(second.isLeader, true);
-  assert.equal(lost, 1);
+  // A voluntary release is not a loss: `onLost` never fires and the tab is not told it failed.
+  assert.equal(lost, 0);
   assert.deepEqual(sent.map((message) => message.type), ["leader-claimed", "leader-released", "leader-claimed"]);
   second.release();
 });

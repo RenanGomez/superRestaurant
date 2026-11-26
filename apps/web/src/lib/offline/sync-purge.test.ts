@@ -57,12 +57,12 @@ test("offline purge policy covers every event and evidence branch", () => {
   const cases: readonly (readonly [OfflinePurgeInput, OfflinePurgeAction])[] = [
     [{ event: "sign_out", hasFinancialEvidence: false }, "purge_all"],
     [{ event: "sign_out", hasFinancialEvidence: true }, "purge_replica_keep_outbox"],
-    [{ event: "auth_revoked", hasFinancialEvidence: false }, "purge_replica_keep_outbox"],
-    [{ event: "auth_revoked", hasFinancialEvidence: true }, "purge_replica_keep_outbox"],
+    [{ event: "auth_revoked", hasFinancialEvidence: false }, "lock_and_purge_replica"],
+    [{ event: "auth_revoked", hasFinancialEvidence: true }, "lock_and_purge_replica"],
     [{ event: "device_revoked", hasFinancialEvidence: false }, "purge_all"],
-    [{ event: "device_revoked", hasFinancialEvidence: true }, "lock_and_keep"],
+    [{ event: "device_revoked", hasFinancialEvidence: true }, "lock_and_purge_replica"],
     [{ event: "device_compromised", hasFinancialEvidence: false }, "purge_all"],
-    [{ event: "device_compromised", hasFinancialEvidence: true }, "purge_replica_keep_outbox"],
+    [{ event: "device_compromised", hasFinancialEvidence: true }, "lock_and_purge_replica"],
   ];
   for (const [input, expected] of cases) {
     const decision = decideOfflinePurge(input);
@@ -122,6 +122,9 @@ test("purgeForScope drops the scope replica but keeps outbox evidence under a fr
   const loaded = await store.loadState(device) as DurableSyncState;
   assert.equal(loaded.replica.length, 0);
   assert.deepEqual(loaded.outbox, evidence.outbox);
+  // A surviving cursor would keep pulling a tenant the device just purged.
+  assert.equal(loaded.scopes[0]?.pullCursor, null);
+  assert.equal(loaded.scopes[0]?.status, "resync_required");
   const db = await openDb(factory);
   const meta = await req(db.transaction("sr_device_meta").objectStore("sr_device_meta").get(device) as IDBRequest<{ keyVersion: number }>);
   const oldKey = await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 1]));
@@ -177,7 +180,7 @@ test("lock and quarantine are public administrative operations that preserve the
   store.close();
 });
 
-test("a locked store refuses purge and rotation while keeping slots and keys intact", async () => {
+test("a locked store refuses purge and rotation unless the caller is the revocation decision", async () => {
   const { factory, store } = await setup();
   await store.persist(evidenceState());
   await store.lock();
@@ -187,7 +190,69 @@ test("a locked store refuses purge and rotation while keeping slots and keys int
   const db = await openDb(factory);
   assert.notEqual(await req(db.transaction("sr_state_slots").objectStore("sr_state_slots").get([device, 0])), undefined);
   assert.notEqual(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 1])), undefined);
-  db.close(); store.close();
+
+  // AUTH_REVOKED locks first and then purges with `allowLocked`: the replica goes away,
+  // the evidence stays readable and the seal does not outlive the purged replica.
+  const outcome = await store.purgeAll({ allowLocked: true, retainEvidenceUnlocked: true });
+  assert.equal(outcome.wiped, false);
+  assert.equal(outcome.removedReplicaCount, 1);
+  assert.equal(outcome.retainedOutboxCount, 1);
+  const meta = await req(db.transaction("sr_device_meta").objectStore("sr_device_meta").get(device) as IDBRequest<{ activeSlot: number; locked: boolean; keyVersion: number }>);
+  const slot = await req(db.transaction("sr_state_slots").objectStore("sr_state_slots").get([device, meta.activeSlot]) as IDBRequest<{ keyVersion: number } | undefined>);
+  assert.equal(meta.locked, false);
+  assert.equal(meta.keyVersion, 2);
+  assert.equal(slot?.keyVersion, 2);
+  assert.equal(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 1])), undefined);
+  assert.notEqual(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 2])), undefined);
+  db.close();
+  const retained = await store.loadState(device) as DurableSyncState;
+  assert.equal(retained.replica.length, 0);
+  assert.deepEqual(retained.outbox, evidenceState().outbox);
+  assert.equal(retained.scopes[0]?.status, "resync_required");
+  assert.equal(retained.scopes[0]?.pullCursor, null);
+  store.close();
+});
+
+test("una purga con allowLocked sin retainEvidenceUnlocked deja el sello puesto", async () => {
+  const { store } = await setup();
+  await store.persist(evidenceState());
+  await store.lock();
+  const outcome = await store.purgeAll({ allowLocked: true });
+  assert.equal(outcome.retainedOutboxCount, 1);
+  await assert.rejects(store.loadState(device), code("STORAGE_LOCKED"));
+  store.close();
+});
+
+test("purgeAll clears every scope cursor so the next session resyncs from scratch", async () => {
+  const { factory, store } = await setup();
+  const state = {
+    ...createEmptyState(device),
+    lastLocalSequence: 2,
+    scopes: [
+      scopeState({ restaurantId: restaurant, branchId: branch }, "cursor-a"),
+      scopeState({ restaurantId: restaurantB, branchId: branchB }, "cursor-b"),
+    ],
+  } as unknown as DurableSyncState;
+  await store.persist(state);
+  const outcome = await store.purgeAll();
+  assert.equal(outcome.wiped, true);
+  const db = await openDb(factory);
+  assert.equal(await req(db.transaction("sr_device_meta").objectStore("sr_device_meta").get(device)), undefined);
+  db.close();
+  assert.equal(await store.loadState(device), null);
+  store.close();
+});
+
+test("purge removes only this device rows under the lock and leaves nothing to read", async () => {
+  const { factory, store, options } = await setup();
+  await store.persist(fixture());
+  await store.purge();
+  const reopened = await WebIndexedDbSyncStorage.open(device, options);
+  assert.equal(await reopened.loadState(device), null);
+  const db = await openDb(factory);
+  assert.equal(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 1])), undefined);
+  db.close();
+  reopened.close();
 });
 
 test("a quarantined store refuses purge and rotation while keeping slots and keys intact", async () => {
