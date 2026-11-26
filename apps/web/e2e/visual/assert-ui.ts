@@ -6,6 +6,9 @@ import type { Page } from "@playwright/test";
 
 import {
   assertVisualSnapshot,
+  insetsFromPseudo,
+  mergeControlInsets,
+  type PseudoStyle,
   type VisualControl,
   type VisualSnapshot,
 } from "../../src/lib/visual-assert.ts";
@@ -16,11 +19,20 @@ interface VisualTracker {
   readonly dialogCalls: string[];
 }
 
+interface RawControl {
+  readonly name: string;
+  readonly width: number;
+  readonly height: number;
+  readonly visible: boolean;
+  readonly before: PseudoStyle;
+  readonly after: PseudoStyle;
+}
+
 interface RawSnapshot {
   readonly viewportWidth: number;
   readonly viewportHeight: number;
   readonly scrollWidth: number;
-  readonly controls: VisualControl[];
+  readonly controls: RawControl[];
   readonly focusedOutline: string | null;
 }
 
@@ -107,7 +119,21 @@ async function readSnapshot(page: Page): Promise<RawSnapshot> {
       return (element.getAttribute("title") ?? "").trim();
     }
 
-    const controls: VisualControl[] = [];
+    function pseudoStyle(element: Element, pseudo: "::before" | "::after"): PseudoStyle {
+      const style = window.getComputedStyle(element, pseudo);
+      return {
+        content: style.content,
+        position: style.position,
+        pointerEvents: style.pointerEvents,
+        inset: style.inset,
+        top: style.top,
+        right: style.right,
+        bottom: style.bottom,
+        left: style.left,
+      };
+    }
+
+    const controls: RawControl[] = [];
     for (const element of document.querySelectorAll(selector)) {
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -123,6 +149,8 @@ async function readSnapshot(page: Page): Promise<RawSnapshot> {
         width: Math.round(rect.width),
         height: Math.round(rect.height),
         visible,
+        before: pseudoStyle(element, "::before"),
+        after: pseudoStyle(element, "::after"),
       });
     }
 
@@ -150,11 +178,27 @@ export async function assertVisualUi(
 ): Promise<void> {
   const tracker = trackVisualUi(page);
   const raw = await readSnapshot(page);
+  const controls: VisualControl[] = raw.controls.map((control) => {
+    const insets = mergeControlInsets(
+      insetsFromPseudo(control.before),
+      insetsFromPseudo(control.after),
+    );
+    return {
+      name: control.name,
+      width: control.width,
+      height: control.height,
+      visible: control.visible,
+      insetLeft: insets.left,
+      insetTop: insets.top,
+      insetRight: insets.right,
+      insetBottom: insets.bottom,
+    };
+  });
   const snapshot: VisualSnapshot = {
     viewportWidth: raw.viewportWidth,
     viewportHeight: raw.viewportHeight,
     scrollWidth: raw.scrollWidth,
-    controls: raw.controls,
+    controls,
     consoleErrors: [...tracker.consoleErrors],
     networkFailures: [...tracker.networkFailures],
     dialogCalls: [...tracker.dialogCalls],
