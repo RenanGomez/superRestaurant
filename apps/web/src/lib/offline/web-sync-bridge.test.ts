@@ -91,6 +91,29 @@ function recordingTransport(): RecordedTransport {
   };
 }
 
+/** Transport that answers every push with a fixed server status, so entries reach a terminal state. */
+function statusTransport(status: "rejected", code: string): SyncTransportPort {
+  return {
+    pull: (request) => Promise.resolve(pullResponse(request.scope)),
+    push: (request: SyncPushRequest): Promise<unknown> => {
+      const event = request.events[0];
+      if (event === undefined) throw new Error("missing event");
+      return Promise.resolve({
+        protocolVersion: 1,
+        results: [{
+          auditId: actor,
+          canonicalVersion: null,
+          code,
+          eventId: event.eventId,
+          idempotencyKey: event.idempotencyKey,
+          status,
+        }],
+        scope: request.scope,
+      });
+    },
+  };
+}
+
 const commitInput = (scope: BranchScope, idempotencyKey: string) => ({
   deviceId: device,
   idempotencyKey,
@@ -239,6 +262,90 @@ test("release conserva la evidencia pendiente y solo purga una cola confirmada",
   });
   const purged = await clean.release();
   assert.equal(purged.purged, true);
+  assert.equal(purgeCalls, 1);
+});
+
+test("release conserva un cash_collect rechazado porque es evidencia no compactable", async () => {
+  const factory = new IDBFactory();
+  let purgeCalls = 0;
+  const storage = await openStorage(factory, "release-rejected-financial");
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    purgeStore: () => {
+      purgeCalls += 1;
+      return Promise.resolve();
+    },
+    storage,
+    transport: statusTransport("rejected", "PAYMENT_DECLINED"),
+  });
+
+  const committed = await bridge.commitLocalOperation({ ...commitInput(scopeA, "rejected-collect"), kind: "cash_collect" });
+  assert.equal(committed?.committed, true);
+  await bridge.syncNow(scopeA);
+  assert.equal(bridge.getSnapshot(scopeA).events[0]?.localState, "rejected");
+
+  const outcome = await bridge.release();
+  assert.equal(outcome.purged, false);
+  assert.equal(outcome.retainedUnconfirmed, 1);
+  assert.equal(purgeCalls, 0);
+
+  // The rejected payment is still readable: the evidence outlived `release()`.
+  const persisted = await storage.loadState(device) as { outbox?: readonly { localState?: string }[] };
+  assert.equal(persisted.outbox?.length, 1);
+  assert.equal(persisted.outbox?.[0]?.localState, "rejected");
+});
+
+test("release purga cuando el único evento es un order aceptado no financiero", async () => {
+  const factory = new IDBFactory();
+  let purgeCalls = 0;
+  const storage = await openStorage(factory, "release-accepted-order");
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    purgeStore: () => {
+      purgeCalls += 1;
+      return Promise.resolve();
+    },
+    storage,
+    transport: recordingTransport(),
+  });
+
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "accepted-order")))?.committed, true);
+  await bridge.syncNow(scopeA);
+  assert.equal(bridge.getSnapshot(scopeA).events[0]?.localState, "accepted");
+
+  const outcome = await bridge.release();
+  assert.equal(outcome.purged, true);
+  assert.equal(outcome.retainedUnconfirmed, 0);
+  assert.equal(purgeCalls, 1);
+});
+
+test("release purga un order rechazado no financiero: solo lo financiero retiene", async () => {
+  const factory = new IDBFactory();
+  let purgeCalls = 0;
+  const storage = await openStorage(factory, "release-rejected-order");
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    purgeStore: () => {
+      purgeCalls += 1;
+      return Promise.resolve();
+    },
+    storage,
+    transport: statusTransport("rejected", "ORDER_REJECTED"),
+  });
+
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "rejected-order")))?.committed, true);
+  await bridge.syncNow(scopeA);
+  assert.equal(bridge.getSnapshot(scopeA).events[0]?.localState, "rejected");
+
+  const outcome = await bridge.release();
+  assert.equal(outcome.purged, true);
+  assert.equal(outcome.retainedUnconfirmed, 0);
   assert.equal(purgeCalls, 1);
 });
 
