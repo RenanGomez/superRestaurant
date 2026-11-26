@@ -333,8 +333,13 @@ test("AUTH_REVOKED bloquea el almacen, purga la replica y conserva el outbox com
   assert.equal(retried.code, "SYNC_BLOCKED");
   assert.equal((await bridge.requestResync(scopeA)).ok, false);
 
-  // The store is locked: the revoked credential cannot decrypt the replica again.
-  await assert.rejects(storage.loadState(device), (error: unknown) => error instanceof Error && "code" in error && error.code === "STORAGE_LOCKED");
+  // The replica is gone and the only retained copy is the evidence, which stays readable so
+  // the unsent financial data is not lost; the bridge itself is sealed against new commits.
+  const retained = await storage.loadState(device) as { replica: readonly unknown[]; outbox: readonly { localState: string }[]; scopes: readonly { status: string; pullCursor: string | null }[] };
+  assert.equal(retained.replica.length, 0);
+  assert.equal(retained.outbox.length, 2);
+  assert.equal(retained.scopes[0]?.status, "resync_required");
+  assert.equal(retained.scopes[0]?.pullCursor, null);
 
   const released = await bridge.release();
   assert.equal(released.action, "lock_and_purge_replica");

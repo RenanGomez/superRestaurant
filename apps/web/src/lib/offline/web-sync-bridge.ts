@@ -711,7 +711,7 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
         // Seal first: a commit landing between the lock and the purge must fail instead of
         // surviving in a store whose replica is already gone.
         await purgeable.lock();
-        const outcome = await purgeable.purgeAll({ allowLocked: true });
+        const outcome = await purgeable.purgeAll({ allowLocked: true, retainEvidenceUnlocked: true });
         return Object.freeze({
           action: decision.action,
           purged: outcome.wiped,

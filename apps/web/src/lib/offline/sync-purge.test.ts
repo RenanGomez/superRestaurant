@@ -192,21 +192,34 @@ test("a locked store refuses purge and rotation unless the caller is the revocat
   assert.notEqual(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 1])), undefined);
 
   // AUTH_REVOKED locks first and then purges with `allowLocked`: the replica goes away,
-  // the evidence stays and the seal is preserved.
-  const outcome = await store.purgeAll({ allowLocked: true });
+  // the evidence stays readable and the seal does not outlive the purged replica.
+  const outcome = await store.purgeAll({ allowLocked: true, retainEvidenceUnlocked: true });
   assert.equal(outcome.wiped, false);
   assert.equal(outcome.removedReplicaCount, 1);
   assert.equal(outcome.retainedOutboxCount, 1);
   const meta = await req(db.transaction("sr_device_meta").objectStore("sr_device_meta").get(device) as IDBRequest<{ activeSlot: number; locked: boolean; keyVersion: number }>);
   const slot = await req(db.transaction("sr_state_slots").objectStore("sr_state_slots").get([device, meta.activeSlot]) as IDBRequest<{ keyVersion: number } | undefined>);
-  assert.equal(meta.locked, true);
+  assert.equal(meta.locked, false);
   assert.equal(meta.keyVersion, 2);
   assert.equal(slot?.keyVersion, 2);
   assert.equal(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 1])), undefined);
   assert.notEqual(await req(db.transaction("sr_crypto_keys").objectStore("sr_crypto_keys").get([device, 2])), undefined);
   db.close();
+  const retained = await store.loadState(device) as DurableSyncState;
+  assert.equal(retained.replica.length, 0);
+  assert.deepEqual(retained.outbox, evidenceState().outbox);
+  assert.equal(retained.scopes[0]?.status, "resync_required");
+  assert.equal(retained.scopes[0]?.pullCursor, null);
+  store.close();
+});
+
+test("una purga con allowLocked sin retainEvidenceUnlocked deja el sello puesto", async () => {
+  const { store } = await setup();
+  await store.persist(evidenceState());
+  await store.lock();
+  const outcome = await store.purgeAll({ allowLocked: true });
+  assert.equal(outcome.retainedOutboxCount, 1);
   await assert.rejects(store.loadState(device), code("STORAGE_LOCKED"));
-  await assert.rejects(store.purgeAll(), code("STORAGE_LOCKED"));
   store.close();
 });
 

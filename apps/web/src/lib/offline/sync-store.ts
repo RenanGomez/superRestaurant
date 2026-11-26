@@ -25,6 +25,12 @@ export interface WebSyncPurgeOptions {
    * this (a revocation decision); every other purge keeps failing with `STORAGE_LOCKED`.
    */
   readonly allowLocked?: boolean;
+  /**
+   * Leaves the retained evidence readable after a revocation purge. The lock exists to stop
+   * the revoked credential from reading the *replica*; once the replica is gone, a permanently
+   * locked store would make the only copy of the unsent financial evidence unrecoverable.
+   */
+  readonly retainEvidenceUnlocked?: boolean;
 }
 /** Only transient load failures are retryable; a destructive purge no longer queues a cross-tab deletion. */
 export class WebSyncStorageError extends Error {
@@ -250,7 +256,11 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     while (await this.read<CryptoKey>(KEYS, [this.deviceId, version])) version += 1;
     return version;
   }
-  private async reencrypt(state: DurableSyncState, meta: Meta): Promise<{ readonly generation: number; readonly keyVersion: number }> {
+  private async reencrypt(
+    state: DurableSyncState,
+    meta: Meta,
+    seal: { readonly locked?: boolean } = {},
+  ): Promise<{ readonly generation: number; readonly keyVersion: number }> {
     const binding = scopeBinding(state);
     const keyVersion = await this.nextKeyVersion(meta);
     const generation = meta.generation + 1;
@@ -264,7 +274,10 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     try {
       tx.objectStore(KEYS).put(key, [this.deviceId, keyVersion]);
       tx.objectStore(SLOTS).put({ ciphertext, iv, generation, keyVersion, scope: binding } satisfies Slot, [this.deviceId, current.activeSlot]);
-      tx.objectStore(META).put({ ...current, generation, keyVersion, scope: binding }, this.deviceId);
+      tx.objectStore(META).put(
+        { ...current, generation, keyVersion, scope: binding, ...(seal.locked === undefined ? {} : { locked: seal.locked }) },
+        this.deviceId,
+      );
       tx.objectStore(KEYS).delete([this.deviceId, meta.keyVersion]);
     } catch (error) { tx.abort(); await done.catch(() => undefined); throw error; }
     await done;
@@ -340,7 +353,11 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
         const retainedScopes = new Set<string>();
         for (const entity of parsed.value.replica) retainedScopes.add(`${entity.restaurantId}/${entity.branchId}`);
         for (const entry of parsed.value.outbox) retainedScopes.add(`${entry.restaurantId}/${entry.branchId}`);
-        const next = await this.reencrypt(parsed.value, meta);
+        const next = await this.reencrypt(
+          parsed.value,
+          meta,
+          options.retainEvidenceUnlocked === true ? { locked: false } : {},
+        );
         this.generation = next.generation;
         return Object.freeze({
           wiped: false,
