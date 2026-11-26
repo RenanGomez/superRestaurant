@@ -1,1640 +1,1781 @@
 {
-    "version":  "2.0.0",
-    "milestone":  "M2/ola-0",
-    "updatedAt":  "2026-11-26",
-    "source":  "docs/plans/plan-deepseek-fases-3-8.md",
-    "notes":  "M1/M2 cerrados (M2 con puertas humanas). M3: API de inventario completa y UI con insumos, recetas, almacenes, movimientos, compras, alertas y costos (#99-#114); contratos HTTP de inventario en verde; faltan journey E2E, pase visual real y el cierre de deuda P3.",
-    "items":  [
-                  {
-                      "id":  "m1-z2b-confirm-pizza-v2",
-                      "title":  "Reconstruir confirm_capture_draft_v3 sobre el cuerpo v2 y probar pizza+zona",
-                      "milestone":  "M1",
-                      "phase":  1,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "supabase/migrations/20261121000100_delivery_zones_settlements.sql",
-                                    "supabase/tests/pizza_model_v2_invariants.sql",
-                                    "supabase/tests/delivery_zones_invariants.sql"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "pnpm --filter @super-restaurant/api verify:pizza-model-v2-schema:rollback en verde sobre PostgreSQL 17 local desde cero",
-                                         "prueba nueva pizza+zona confirma sin 42703 (record \"product\" has no field \"base_group_id\")",
-                                         "prueba negativa del invariante delivery_zones_coverage_nonempty rechaza una zona sin cobertura",
-                                         "supabase/tests/pizza_model_v2_invariants.sql y delivery_zones_invariants.sql pasan sin tolerancia en el job pg-verify",
-                                         "git diff --check"
-                                     ],
-                      "etaMin":  180,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  51,
-                      "parent":  "M0-7",
-                      "note":  "P1 abierto desde el smoke r2; migraciÃ³n 20261121000100 no aplicada en remoto. La reconstrucciÃ³n reutiliza el cuerpo v2 de 20261120000100 (~1767). Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m1-pg-verify-clean",
-                      "title":  "Quitar las tolerancias de pg-verify y dejar los siete tests SQL conocidos en verde",
-                      "milestone":  "M1",
-                      "phase":  0,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    ".github/workflows/ci.yml",
-                                    "supabase/tests/capture_drafts_invariants.sql",
-                                    "supabase/tests/capture_repeat_order_invariants.sql",
-                                    "supabase/tests/capture_selection_plan_invariants.sql",
-                                    "supabase/tests/menu_shared_modifier_groups_invariants.sql",
-                                    "supabase/tests/order_deliveries_invariants.sql"
-                                ],
-                      "deps":  [
-                                   "m1-z2b-confirm-pizza-v2"
-                               ],
-                      "acceptance":  [
-                                         "KNOWN_FAILING_SQL_TESTS queda vacÃ­o o se elimina de .github/workflows/ci.yml",
-                                         "se restaura verify:pizza-model-v2-schema:rollback en el paso de verificadores y se quita el continue-on-error de Run local HTTP flow",
-                                         "job pg-verify en verde en un PR (migraciones desde cero, supabase/tests y verify:*:rollback)",
-                                         "git diff --check"
-                                     ],
-                      "etaMin":  180,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  19,
-                      "parent":  "M0-7",
-                      "note":  "Cierra la deuda registrada en docs/agentic/debt.md Â§M0-7. Cada test tolerado se triage: se arregla o se documenta como P1/P2, no se vuelve a tolerar."
-                  },
-                  {
-                      "id":  "m1-resolve-address-settlement",
-                      "title":  "resolveAddress no propaga settlementId sin confirmar y devuelve settlement_unknown",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "apps/api/src/delivery-zones.ts",
-                                    "apps/api/src/delivery-zones.test.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "prueba nueva: una direcciÃ³n sin asentamiento confirmado recibe settlement_unknown y no un settlementId inventado",
-                                         "el flujo de cotizaciÃ³n sigue pasando settlementId: null y confirm relee la cuota manual en SQL, no del cliente",
-                                         "pnpm --filter @super-restaurant/api test en verde",
-                                         "pnpm --filter @super-restaurant/web typecheck en verde si consume el contrato"
-                                     ],
-                      "etaMin":  90,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  11,
-                      "parent":  "review-smoke-r2-p2",
-                      "note":  "P2 de la revisiÃ³n Sonnet del smoke r2 (apps/api/src/delivery-zones.ts ~646). Verificar tambiÃ©n que dist/ no estÃ© versionado."
-                  },
-                  {
-                      "id":  "m1-k0b-pickup-contact",
-                      "title":  "Contacto de Recoger en el borrador y regla Domicilio exige cliente en servidor",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "supabase/migrations/",
-                                    "apps/api/src/captures.ts",
-                                    "packages/shared-types/src/commercial-capture.ts",
-                                    "packages/shared-types/src/capture-selection-plan.ts"
-                                ],
-                      "deps":  [
-                                   "m1-z2b-confirm-pizza-v2"
-                               ],
-                      "acceptance":  [
-                                         "borrador de Recoger acepta nombre y telÃ©fono de contacto sin exigir cliente",
-                                         "confirm_capture_order rechaza Domicilio sin cliente con error de dominio claro y prueba SQL",
-                                         "pnpm --filter @super-restaurant/api verify:capture-schema:rollback en verde (PostgreSQL local rollback-only)",
-                                         "pnpm lint \u0026\u0026 pnpm typecheck \u0026\u0026 pnpm test en verde",
-                                         "migraciÃ³n nueva versionada; no se edita ninguna aplicada"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  20,
-                      "parent":  "smoke-r2-k0",
-                      "note":  "Depende de liberar el carril de migraciones (M1-1). shared-types es carril de un solo escritor cuando el contrato lo consumen dos apps o mÃ¡s."
-                  },
-                  {
-                      "id":  "m1-mobile-pay-note",
-                      "title":  "Cobro (efectivo, tarjeta manual, transferencia) y nota de lÃ­nea en mobile",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/mobile/src/ui/order-draft-screen.tsx",
-                                    "apps/mobile/src/ui/components.tsx",
-                                    "apps/mobile/src/mobile-state.ts",
-                                    "apps/mobile/src/mobile-state.test.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "el mesero cobra y registra nota de lÃ­nea desde mobile usando los endpoints existentes, sin cÃ¡lculo de dinero en cliente",
-                                         "estados de carga, error y Ã©xito explÃ­citos; sin alert/confirm/prompt; targets de 44 px",
-                                         "pnpm --filter @super-restaurant/mobile test \u0026\u0026 pnpm --filter @super-restaurant/mobile typecheck \u0026\u0026 pnpm --filter @super-restaurant/mobile lint en verde",
-                                         "captura de pantalla real en 390x844 con consola limpia"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  44,
-                      "parent":  "mvp-mobile-60",
-                      "note":  "El servidor revalida montos; el cliente no decide permisos ni totales. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m1-kitchen-ready-notify",
-                      "title":  "NotificaciÃ³n Â«platillo listoÂ» en web, KDS y mobile sobre el WebSocket existente",
-                      "milestone":  "M1",
-                      "phase":  1,
-                      "level":  "B",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "packages/shared-types/src/realtime.ts",
-                                    "apps/api/src/realtime.gateway.ts",
-                                    "apps/api/src/realtime.gateway.test.ts",
-                                    "apps/web/src/app/app/orders/",
-                                    "apps/kds/src/",
-                                    "apps/mobile/src/ui/active-orders-panel.tsx"
-                                ],
-                      "deps":  [
-                                   "m1-mobile-pay-note"
-                               ],
-                      "acceptance":  [
-                                         "al marcar una lÃ­nea lista en KDS, web y mobile reciben el aviso sin recargar la pÃ¡gina",
-                                         "el canal respeta branchId y stationId; una sucursal o estaciÃ³n ajena nunca recibe el evento",
-                                         "pnpm --filter @super-restaurant/api test y pnpm --filter @super-restaurant/kds test en verde",
-                                         "verificaciÃ³n en navegador real con consola limpia"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  16,
-                      "parent":  "mvp-kds-80",
-                      "note":  "Dependencia de mobile solo por el directorio UI compartido; si el orquestador reparte, serializar ese archivo."
-                  },
-                  {
-                      "id":  "m1-k0b2-customer-open-captures",
-                      "title":  "K0-B2: capturas abiertas por cliente (SQL+API+deep link)",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "supabase/migrations/",
-                                    "supabase/tests/",
-                                    "apps/api/src/captures.ts",
-                                    "apps/api/src/customer-order-history.ts",
-                                    "apps/web/src/app/app/capture/"
-                                ],
-                      "deps":  [
-                                   "m1-k0b-pickup-contact"
-                               ],
-                      "acceptance":  [
-                                         "funcion SQL y endpoint listan borradores abiertos por customerId acotados a restaurantId/branchId y permiso customers.read",
-                                         "/app/capture?draftId= retoma el borrador",
-                                         "migracion nueva con guards, prueba SQL en supabase/tests cableada en CI, pruebas de aislamiento",
-                                         "lint typecheck test del alcance en verde"
-                                     ],
-                      "etaMin":  150,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  "superrestaurant-29",
-                      "pr":  26,
-                      "parent":  "smoke-r2-k3",
-                      "note":  "Desbloquea K3 (-26 reporto falta de fuente server-side)."
-                  },
-                  {
-                      "id":  "m1-k3-customer-captures",
-                      "title":  "K3: capturas abiertas del cliente en su ficha",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "C",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "apps/web/src/app/app/customers/",
-                                    "apps/api/src/customer-directory.ts",
-                                    "apps/api/src/customer-order-history.ts"
-                                ],
-                      "deps":  [
-                                   "m1-k0b-pickup-contact",
-                                   "m1-k0b2-customer-open-captures"
-                               ],
-                      "acceptance":  [
-                                         "la ficha del cliente lista sus capturas abiertas y permite retomarlas",
-                                         "consulta acotada a restaurantId/branchId y permiso customers.read en servidor",
-                                         "pnpm --filter @super-restaurant/web test y typecheck en verde",
-                                         "captura real en escritorio y 390x844 con consola limpia"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  "superrestaurant-36",
-                      "pr":  32,
-                      "parent":  "smoke-r2-k3",
-                      "note":  "DespuÃ©s de K0-B; K4 (confirmaciÃ³n de borrado de telÃ©fono) ya estÃ¡ integrado."
-                  },
-                  {
-                      "id":  "m1-e2e-journeys-1-6",
-                      "title":  "Specs Playwright de los journeys 1-6 contra PostgreSQL local",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "apps/web/e2e/journeys/",
-                                    "apps/web/e2e/fixtures/"
-                                ],
-                      "deps":  [
-                                   "m1-z2b-confirm-pizza-v2"
-                               ],
-                      "acceptance":  [
-                                         "existe una spec determinista por journey 1, 2, 3, 4, 5 y 6 en apps/web/e2e/journeys/",
-                                         "datos semilla deterministas y aislamiento por runId, con cleanup obligatorio",
-                                         "pnpm --filter @super-restaurant/web e2e:all en verde contra API y web locales",
-                                         "pnpm --filter @super-restaurant/web e2e:typecheck en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  21,
-                      "parent":  "M1-journeys",
-                      "note":  "Journeys del plan maestro Â§4.2: 1 abrir turno/caja; 2 iniciar o recuperar orden; 3 cliente y direcciÃ³n; 4 configurar producto; 5 guardar en espera y cancelar; 6 confirmar precio, pago y enviar a estaciÃ³n."
-                  },
-                  {
-                      "id":  "m1-e2e-journeys-7-12",
-                      "title":  "Specs Playwright de los journeys 7-12 contra PostgreSQL local",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "apps/web/e2e/journeys/",
-                                    "apps/web/e2e/fixtures/"
-                                ],
-                      "deps":  [
-                                   "m1-e2e-journeys-1-6"
-                               ],
-                      "acceptance":  [
-                                         "existe una spec determinista por journey 7, 8, 9, 10, 11 y 12 (12 puede ser online-first: reconexiÃ³n sin duplicar)",
-                                         "reutiliza helpers y fixtures de M1-8 sin duplicarlos",
-                                         "pnpm --filter @super-restaurant/web e2e:all en verde contra API y web locales",
-                                         "pnpm --filter @super-restaurant/web e2e:typecheck en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  24,
-                      "parent":  "M1-journeys",
-                      "note":  "Journeys: 7 preparar/listo/asignar reparto; 8 descuento y cortesÃ­a con autorizaciÃ³n; 9 pagos mixtos sin duplicados; 10 imprimir y cerrar con historial; 11 cerrar caja y conciliar; 12 continuidad ante pÃ©rdida de red."
-                  },
-                  {
-                      "id":  "m1-coverage-inventory",
-                      "title":  "Inventario de cobertura obligatoria (Â§4.4) y sus huecos como Ã­tems",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "D",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "docs/agentic/coverage-m1.md"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "docs/agentic/coverage-m1.md marca cubierto/faltante por cada Ã¡rea de Â§4.4 con archivo o prueba que lo demuestra",
-                                         "cada hueco queda listado con nivel y motor propuesto para entrar al backlog con parent",
-                                         "solo lectura sobre el cÃ³digo; no toca fuentes ni SQL"
-                                     ],
-                      "etaMin":  90,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  10,
-                      "parent":  "M1",
-                      "note":  "Ãreas: aislamiento entre restaurantes/sucursales, dinero y redondeo, mÃ¡quinas de estado, doble envÃ­o/doble cobro, cancelaciÃ³n/reembolso, reconexiÃ³n y conflictos offline, inventario compensatorio, permisos de supervisor, migraciones desde cero y sobre la versiÃ³n anterior."
-                  },
-                  {
-                      "id":  "m1-sec-rate-limit",
-                      "title":  "Rate limiting en auth, pagos y caja, con repaso de sanitizaciÃ³n y RBAC",
-                      "milestone":  "M1",
-                      "phase":  0,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "apps/api/src/auth/",
-                                    "apps/api/src/payments.ts",
-                                    "apps/api/src/operational-shifts.ts",
-                                    "apps/api/src/config.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "lÃ­mites de tasa activos en login, cobro y caja; respuesta 429 sin filtrar secretos",
-                                         "prueba de aislamiento entre restaurantes y de permiso denegado sigue en verde",
-                                         "entradas validadas y sanitizadas; ningÃºn secreto en logs",
-                                         "pnpm lint \u0026\u0026 pnpm typecheck \u0026\u0026 pnpm test en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  50,
-                      "parent":  "M1-produccion",
-                      "note":  "Nivel A: revisiÃ³n doble de familias distintas y pruebas de invariantes G4. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m1-obs-health",
-                      "title":  "Health/readiness, logs con correlationId y mÃ©tricas mÃ­nimas",
-                      "milestone":  "M1",
-                      "phase":  0,
-                      "level":  "B",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "apps/api/src/health.controller.ts",
-                                    "apps/api/src/main.ts",
-                                    "apps/api/src/app-setup.ts",
-                                    "apps/api/src/operations/"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "GET /health y /ready distinguen proceso vivo de dependencias listas",
-                                         "cada request lleva correlationId en los logs; restaurantId/branchId/orderId cuando aplique",
-                                         "mÃ©tricas mÃ­nimas de errores y latencia expuestas sin datos personales",
-                                         "pnpm --filter @super-restaurant/api test \u0026\u0026 typecheck en verde"
-                                     ],
-                      "etaMin":  180,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  23,
-                      "parent":  "M1-produccion",
-                      "note":  "No registrar secretos, tokens ni payloads personales completos."
-                  },
-                  {
-                      "id":  "m1-runbooks-release",
-                      "title":  "Runbooks de deploy, respaldo/restauraciÃ³n, RPO/RTO y rollback",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "D",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "docs/runbooks/deploy.md",
-                                    "docs/runbooks/backup-restore.md",
-                                    "docs/runbooks/rollback.md"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "los tres runbooks existen con comandos exactos, prerrequisitos y verificaciÃ³n posterior",
-                                         "el de respaldo define RPO/RTO y una prueba de restauraciÃ³n reproducible",
-                                         "git diff --check"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  43,
-                      "parent":  "M1-produccion",
-                      "note":  "Solo documentaciÃ³n; el hosting y la polÃ­tica de respaldo real siguen siendo decisiÃ³n humana (DECISIONS_PENDING.md). Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m1-visual-verify-r2",
-                      "title":  "VerificaciÃ³n visual de B2, B3, B4, Z4, Z5, K1, K2 y K4 en escritorio y 390x844",
-                      "milestone":  "M1",
-                      "phase":  2,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "docs/agentic/visual-verify-r2.md"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "capturas reales de cada pantalla en escritorio y 390x844, consola limpia y targets de 44 px",
-                                         "ningÃºn alert/confirm/prompt; contraste y foco visibles",
-                                         "hallazgos P1/P2 se reportan con captura y ruta; P3 va a debt.md",
-                                         "solo lectura: no modifica cÃ³digo"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  18,
-                      "parent":  "smoke-r2-visual",
-                      "note":  "Estas pantallas ya estÃ¡n en main tras la integraciÃ³n de feat/smoke-r1. Login con tools/agentic/local-servers/e2e-auth.bat."
-                  },
-                  {
-                      "id":  "m1-menu-tabs-r2",
-                      "title":  "PestaÃ±as CategorÃ­as/Productos/Modificadores/TamaÃ±os y anchos de inputs en el editor de menÃº",
-                      "milestone":  "M1",
-                      "phase":  1,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/web/src/app/app/menu/"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "las cuatro pestaÃ±as conservan estado y no recargan el editor",
-                                         "anchos de inputs consistentes y Duplicar junto a Activo",
-                                         "pnpm --filter @super-restaurant/web test \u0026\u0026 typecheck \u0026\u0026 lint en verde",
-                                         "captura real en escritorio y 390x844 con consola limpia"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  15,
-                      "parent":  "TODO-menu-tabs-r2",
-                      "note":  "P2 ya integrado; esta ronda es solo presentaciÃ³n. Depende de no haber otro Ã­tem abierto en apps/web/src/app/app/menu/."
-                  },
-                  {
-                      "id":  "m2-adr-005-local-storage",
-                      "title":  "ADR-005: selecciÃ³n de almacenamiento local web/mobile, cifrado en reposo y lÃ­mites offline",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "D",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "docs/adr/ADR-005.md",
-                                    "docs/THIRD_PARTY_LICENSE_AUDIT.md"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "docs/adr/ADR-005.md evalÃºa opciones concretas para web (IndexedDB nativo vs Dexie vs RxDB) y mobile (expo-sqlite vs WatermelonDB vs alternativa compatible con Expo 57 / RN 0.86), justifica la elecciÃ³n y fija transacciÃ³n atÃ³mica de DurableSyncStoragePort",
-                                         "define estrategia de cifrado en reposo y gestiÃ³n de claves (Web Crypto AES-GCM en web; expo-secure-store + cifrado en mobile), purga/bloqueo al cerrar sesiÃ³n o revocar dispositivo, cuota y manejo de corrupciÃ³n",
-                                         "documenta compatibilidad de licencias en docs/THIRD_PARTY_LICENSE_AUDIT.md si se propone cualquier dependencia externa y fija supuestos conservadores de retenciÃ³n y lÃ­mites de efectivo offline",
-                                         "solo documentaciÃ³n; no modifica cÃ³digo fuente, SQL ni pnpm-lock.yaml",
-                                         "git diff --check"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  "superrestaurant-32",
-                      "pr":  29,
-                      "parent":  "M2-adr",
-                      "note":  "Resuelve ADR-005 pendiente en ADR-004, OFFLINE_SYNC_CONTRACT Â§14 y TODO Fase 3. Desbloquea los adaptadores de almacenamiento local y la PWA."
-                  },
-                  {
-                      "id":  "m2-sync-contracts-engine",
-                      "title":  "Contratos compartidos de sync en shared-types y endurecimiento de packages/sync-engine",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "packages/shared-types/src/sync.ts",
-                                    "packages/shared-types/src/sync.runtime.test.ts",
-                                    "packages/shared-types/src/index.ts",
-                                    "packages/shared-types/package.json",
-                                    "packages/sync-engine/src/contract.ts",
-                                    "packages/sync-engine/src/durable-state.ts",
-                                    "packages/sync-engine/src/engine.ts",
-                                    "packages/sync-engine/src/outbox-state.ts",
-                                    "packages/sync-engine/src/capability-guard.ts",
-                                    "packages/sync-engine/src/schema-migration.ts",
-                                    "packages/sync-engine/src/index.ts",
-                                    "packages/sync-engine/package.json"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "packages/shared-types/src/sync.ts publica y valida en runtime (claves exactas, sin float, scope obligatorio) SyncEnvelopeV1, SyncPushRequest/Response, SyncPullRequest/Response, ManualReviewCaseV1 y el catÃ¡logo versionado de entityType/operation de Fase 3",
-                                         "packages/sync-engine reutiliza los contratos de shared-types y agrega: guard de matriz de capacidades offline por cliente/operaciÃ³n, hook determinista de migraciÃ³n de schemaVersion, correcciÃ³n de rollback con mÃºltiples pendientes por entidad, compactaciÃ³n segura sin purgar financieros y resync por snapshot",
-                                         "pnpm --filter @super-restaurant/shared-types test \u0026\u0026 pnpm --filter @super-restaurant/sync-engine test en verde",
-                                         "pnpm lint \u0026\u0026 pnpm typecheck \u0026\u0026 pnpm test \u0026\u0026 pnpm build en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  "superrestaurant-34",
-                      "pr":  31,
-                      "parent":  "m1-coverage-inventory",
-                      "note":  "Inicio de la cadena estricta de nivel A (carril codex). Toca packages/shared-types (carril de un solo escritor) y packages/sync-engine; requiere revisiÃ³n doble y pruebas de invariantes G4."
-                  },
-                  {
-                      "id":  "m2-sync-merge-domain",
-                      "title":  "Reglas deterministas de merge y clasificaciÃ³n de conflictos offline en packages/domain",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "packages/domain/src/sync-merge.ts",
-                                    "packages/domain/src/sync-merge.test.ts",
-                                    "packages/domain/src/index.ts",
-                                    "packages/domain/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-sync-contracts-engine"
-                               ],
-                      "acceptance":  [
-                                         "packages/domain/src/sync-merge.ts implementa sin dependencias de infraestructura ni float las reglas de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX Â§4.2 para Order, OrderItem, DiningTable, KdsTicket, Payment y CashMovement",
-                                         "lÃ­neas aditivas con orderItemId distinto combinan y recalculan en minor units desde snapshots; ediciÃ³n concurrente de misma lÃ­nea, disputa de mesa, cancelaciÃ³n post-envÃ­o y cobro excedente/clave distinta devuelven conflict o manual_review (nunca LWW)",
-                                         "transiciones monotÃ³nicas de OrderItem/KdsTicket aceptan o deduplican sin retroceder estado; tombstones bloquean resurrecciÃ³n ante updates obsoletos; occurredAt nunca decide prioridad ni orden",
-                                         "pnpm --filter @super-restaurant/domain lint \u0026\u0026 pnpm --filter @super-restaurant/domain typecheck \u0026\u0026 pnpm --filter @super-restaurant/domain test \u0026\u0026 pnpm --filter @super-restaurant/domain build en verde"
-                                     ],
-                      "etaMin":  210,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  36,
-                      "parent":  "TODO-P3",
-                      "note":  "Paso 2 de la cadena codex. Dominio puro de dinero y estados crÃ­ticos (nivel A); nunca importa NestJS, React, SQL ni red."
-                  },
-                  {
-                      "id":  "m2-sync-sql-migrations",
-                      "title":  "MigraciÃ³n SQL de ledger de deduplicaciÃ³n, dispositivos, changelog por cursor y manual_review",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "supabase/migrations/",
-                                    "supabase/tests/sync_ledger_invariants.sql",
-                                    "apps/api/src/operations/sync-schema-verification.ts",
-                                    "apps/api/src/operations/run-sync-schema-verification.ts",
-                                    "apps/api/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-sync-merge-domain"
-                               ],
-                      "acceptance":  [
-                                         "migraciÃ³n nueva versionada (timestamp asignado en el brief) crea tablas en app con RLS+FORCE y cero grants directos: sync_devices, sync_event_ledger (dedup por scope+eventId y scope+idempotencyKey con huella y retenciÃ³n protegida para eventos financieros), sync_changelog (secuencia canÃ³nica monotÃ³nica + tombstones) y sync_manual_review_cases",
-                                         "funciones SECURITY DEFINER en app_private con search_path fijo y EXECUTE Ãºnicamente para app_api validan restaurante/sucursal, monotonicidad de local_sequence por device_id, reutilizaciÃ³n incompatible de idempotencyKey y aislamiento estricto entre tenants",
-                                         "supabase/tests/sync_ledger_invariants.sql y pnpm --filter @super-restaurant/api run verify:sync-schema:rollback pasan en PostgreSQL 17 local desde cero",
-                                         "pnpm lint \u0026\u0026 pnpm typecheck \u0026\u0026 pnpm test en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  "superrestaurant-40",
-                      "pr":  39,
-                      "parent":  "m1-coverage-inventory",
-                      "note":  "Paso 3 de la cadena codex. Carril exclusivo de supabase/migrations/; no editar ninguna migraciÃ³n ya aplicada. No aplicar en remoto sin lote autorizado. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-api-sync-push-merge",
-                      "title":  "Endpoint POST /sync por lotes con revalidaciÃ³n server-side, deduplicaciÃ³n y merge determinista",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "apps/api/src/sync/sync-push.service.ts",
-                                    "apps/api/src/sync/sync-merge-executor.ts",
-                                    "apps/api/src/sync/sync.controller.ts",
-                                    "apps/api/src/sync/sync-push.test.ts",
-                                    "apps/api/src/auth/rbac-policy.ts",
-                                    "apps/api/src/auth/rbac-policy.test.ts",
-                                    "apps/api/src/app.module.ts",
-                                    "apps/api/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-sync-sql-migrations"
-                               ],
-                      "acceptance":  [
-                                         "POST /sync procesa lotes acotados a un solo scope con transacciÃ³n independiente por evento y devuelve SyncEventResult para cada eventId (accepted|duplicate|rejected|conflict|manual_review) sin ocultar errores parciales",
-                                         "antes de deduplicar o aplicar cada evento revalida token, deviceId activo, membresÃ­a, branchId-\u003erestaurantId y permiso RBAC; actor o dispositivo revocado devuelve AUTH_REVOKED/DEVICE_REVOKED y mueve financieros pendientes a manual_review",
-                                         "despacha mutaciones sobre las autoridades existentes (orders, payments, cash-register, dining-tables, kds) usando sync-merge de packages/domain; recalcula dinero en servidor sin float y nunca permite LWW ni doble cobro",
-                                         "logs estructurados incluyen correlationId, restaurantId, branchId, deviceId y eventId sin PAN, CVV, tokens ni payloads sensibles",
-                                         "pnpm lint \u0026\u0026 pnpm typecheck \u0026\u0026 pnpm test \u0026\u0026 pnpm build en verde"
-                                     ],
-                      "etaMin":  270,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  60,
-                      "parent":  "TODO-P3",
-                      "note":  "Paso 4 de la cadena codex. Nivel A crÃ­tico: toca autorizaciÃ³n RBAC, dinero y escritura transaccional por evento. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-api-sync-pull-review",
-                      "title":  "Endpoints POST /sync/pull por cursor opaco, registro de dispositivos y resoluciÃ³n manual_review",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "apps/api/src/sync/sync-pull.service.ts",
-                                    "apps/api/src/sync/sync-cursor.ts",
-                                    "apps/api/src/sync/sync-manual-review.service.ts",
-                                    "apps/api/src/sync/sync-review.controller.ts",
-                                    "apps/api/src/sync/sync-pull.test.ts",
-                                    "apps/api/src/sync/sync-manual-review.test.ts",
-                                    "apps/api/src/app.module.ts",
-                                    "apps/api/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-api-sync-push-merge"
-                               ],
-                      "acceptance":  [
-                                         "POST /sync/pull devuelve cambios canÃ³nicos y tombstones en orden de servidor con cursor opaco versionado ligado a restaurantId, branchId y principal; cursor de otro scope o expirado devuelve CURSOR_SCOPE_MISMATCH/CURSOR_EXPIRED sin fuga de datos",
-                                         "expone registro/verificaciÃ³n de dispositivo autorizado y GET/POST /sync/manual-review restringido a roles supervisores (sync.manual_review.resolve) con resoluciÃ³n compensatoria auditada y motivo obligatorio",
-                                         "pruebas unitarias y de contrato cubren paginaciÃ³n, resync, tombstones, aislamiento cross-tenant/cross-branch y revocaciÃ³n",
-                                         "pnpm lint \u0026\u0026 pnpm typecheck \u0026\u0026 pnpm test \u0026\u0026 pnpm build en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  65,
-                      "parent":  "m1-coverage-inventory",
-                      "note":  "Paso 5 de la cadena codex. Completa el backend de sincronizaciÃ³n y desbloquea pruebas de conflicto multi-dispositivo y clientes. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-web-local-storage-crypto",
-                      "title":  "Almacenamiento local IndexedDB cifrado en reposo y transporte sync para apps/web",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "apps/web/src/lib/offline/",
-                                    "apps/web/package.json",
-                                    "pnpm-lock.yaml"
-                                ],
-                      "deps":  [
-                                   "m2-adr-005-local-storage",
-                                   "m2-api-sync-pull-review"
-                               ],
-                      "acceptance":  [
-                                         "implementa DurableSyncStoragePort sobre IndexedDB (segÃºn ADR-005) garantizando commit atÃ³mico de rÃ©plica + outbox + localSequence + pullCursor y detecciÃ³n explÃ­cita de falta de cuota o corrupciÃ³n",
-                                         "cifra en reposo los registros sensibles de rÃ©plica/outbox con Web Crypto AES-GCM y clave no extraÃ­ble ligada a sesiÃ³n/dispositivo; purga/bloquea al cerrar sesiÃ³n o revocar sin perder evidencia requerida de manual_review",
-                                         "implementa SyncTransportPort HTTP hacia POST /sync y POST /sync/pull con manejo de errores retryable, sin almacenar secretos de servidor ni PAN/CVV",
-                                         "pnpm --filter @super-restaurant/web lint \u0026\u0026 pnpm --filter @super-restaurant/web typecheck \u0026\u0026 pnpm --filter @super-restaurant/web test \u0026\u0026 pnpm --filter @super-restaurant/web build en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  62,
-                      "parent":  "TODO-P3",
-                      "note":  "Paso 6 de la cadena codex. Clasificado nivel A porque implementa cifrado en reposo y ciclo de vida de claves para datos sensibles (AGENTS Â§13, OFFLINE_SYNC_CONTRACT Â§12) y actualiza pnpm-lock.yaml. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-mobile-local-storage-crypto",
-                      "title":  "Almacenamiento local cifrado en apps/mobile con expo-secure-store y transporte sync",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "codex",
-                      "paths":  [
-                                    "apps/mobile/src/offline/",
-                                    "apps/mobile/src/sign-out.ts",
-                                    "apps/mobile/package.json",
-                                    "pnpm-lock.yaml"
-                                ],
-                      "deps":  [
-                                   "m2-adr-005-local-storage",
-                                   "m2-web-local-storage-crypto"
-                               ],
-                      "acceptance":  [
-                                         "implementa DurableSyncStoragePort mÃ³vil (segÃºn ADR-005) con escritura atÃ³mica de rÃ©plica + outbox + localSequence + pullCursor y reutiliza el deviceId persistente de apps/mobile/src/expo-device-identity.ts",
-                                         "gestiona clave de cifrado en expo-secure-store y cifra en reposo datos sensibles locales; sign-out y revocaciÃ³n impiden nuevos pushes y purgan/bloquean datos sensibles de acuerdo con ADR-005",
-                                         "implementa SyncTransportPort HTTP autenticado hacia POST /sync y POST /sync/pull con pruebas unitarias de atomicidad, reinicio y revocaciÃ³n",
-                                         "pnpm --filter @super-restaurant/mobile lint \u0026\u0026 pnpm --filter @super-restaurant/mobile typecheck \u0026\u0026 pnpm --filter @super-restaurant/mobile test \u0026\u0026 pnpm --filter @super-restaurant/mobile build en verde"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  66,
-                      "parent":  "TODO-P3",
-                      "note":  "Paso 7 y Ãºltimo de la cadena codex. Nivel A por cifrado local con expo-secure-store, manejo de cierre de sesiÃ³n y escritura exclusiva de pnpm-lock.yaml. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-web-pwa-shell",
-                      "title":  "Convertir apps/web en PWA instalable con manifest y Service Worker seguro",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/web/public/sw.js",
-                                    "apps/web/public/icons/",
-                                    "apps/web/src/app/manifest.ts",
-                                    "apps/web/src/components/pwa-register.tsx",
-                                    "apps/web/src/app/layout.tsx",
-                                    "apps/web/next.config.ts"
-                                ],
-                      "deps":  [
-                                   "m2-adr-005-local-storage"
-                               ],
-                      "acceptance":  [
-                                         "apps/web expone manifest vÃ¡lido (/manifest.webmanifest), iconos instalables y Service Worker que cachea Ãºnicamente activos estÃ¡ticos y el app shell, sin cachear respuestas API privadas/no-store ni mutaciones POST",
-                                         "aviso in-app accesible cuando existe una versiÃ³n nueva del Service Worker o esquema actualizado, sin alert/confirm/prompt y con targets tÃ¡ctiles de al menos 44 px",
-                                         "pnpm --filter @super-restaurant/web lint \u0026\u0026 pnpm --filter @super-restaurant/web typecheck \u0026\u0026 pnpm --filter @super-restaurant/web test \u0026\u0026 pnpm --filter @super-restaurant/web build en verde",
-                                         "verificaciÃ³n en navegador real (escritorio y 390x844): manifest y SW activos, recarga del shell en modo offline sin overlay ni errores de consola"
-                                     ],
-                      "etaMin":  150,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  "superrestaurant-37",
-                      "pr":  34,
-                      "parent":  "TODO-P3",
-                      "note":  "Nivel C (UI/PWA). No toca apps/web/package.json ni src/app/app/ para correr en paralelo con la cadena codex sin solapamiento de rutas."
-                  },
-                  {
-                      "id":  "m2-kds-offline-cache",
-                      "title":  "CachÃ© local IndexedDB en KDS, avance monotÃ³nico offline y recuperaciÃ³n por cursor",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/kds/src/",
-                                    "apps/kds/package.json",
-                                    "pnpm-lock.yaml"
-                                ],
-                      "deps":  [
-                                   "m2-mobile-local-storage-crypto"
-                               ],
-                      "acceptance":  [
-                                         "KDS persiste localmente en IndexedDB los tickets ya recibidos de su sucursal/estaciÃ³n y muestra la hora de Ãºltima recepciÃ³n cuando pierde WAN",
-                                         "permite avanzar localmente (preparing/ready) tickets ya recibidos de su estaciÃ³n encolando en DeviceSyncEngine con copy explÃ­cito de que otras estaciones lo verÃ¡n al sincronizar; bloquea reasignaciÃ³n de estaciÃ³n/sucursal y no afirma recepciÃ³n de Ã³rdenes nuevas sin WAN",
-                                         "al reconectar hace push de outbox y pull incremental por cursor para recuperar tickets perdidos tras caÃ­da de WebSocket sin duplicados ni fugas de estaciÃ³n",
-                                         "pnpm --filter @super-restaurant/kds lint \u0026\u0026 pnpm --filter @super-restaurant/kds typecheck \u0026\u0026 pnpm --filter @super-restaurant/kds test \u0026\u0026 pnpm --filter @super-restaurant/kds build en verde"
-                                     ],
-                      "etaMin":  180,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  58,
-                      "parent":  "TODO-P3",
-                      "note":  "Nivel B porque los tickets KDS solo contienen datos de preparaciÃ³n de cocina (sin PII, dinero ni secretos de autenticaciÃ³n). Depende de m2-mobile-local-storage-crypto para serializar el acceso exclusivo a pnpm-lock.yaml. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-web-sync-status-ui",
-                      "title":  "Barra de estado de conectividad y vista /app/sync de pendientes, errores y manual_review en web",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/web/src/components/sync-status-bar.tsx",
-                                    "apps/web/src/app/app/sync/",
-                                    "apps/web/src/app/app/layout.tsx",
-                                    "apps/web/src/app/app/app-nav.tsx",
-                                    "apps/web/src/lib/sync-ui.ts",
-                                    "apps/web/src/lib/sync-ui.test.ts",
-                                    "apps/web/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-web-local-storage-crypto"
-                               ],
-                      "acceptance":  [
-                                         "el shell autenticado muestra estado real de conectividad (online|degraded|offline|reconnecting|sync_blocked), sucursal activa, contador de eventos pendientes y hora de Ãºltimo sync confirmado",
-                                         "la pantalla /app/sync lista cada evento con estado, reintentos, Ãºltimo error, acciÃ³n segura de reintento/resync y flujo de revisiÃ³n manual para supervisores usando los textos en espaÃ±ol de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX Â§2.3 (sin jerga tÃ©cnica ni UUIDs expuestos al operador)",
-                                         "targets tÃ¡ctiles \u003e= 44 px, foco visible, respeto a reduced-motion, cero alert/confirm/prompt y unitarias para helpers puros en sync-ui.test.ts",
-                                         "pnpm --filter @super-restaurant/web lint \u0026\u0026 pnpm --filter @super-restaurant/web typecheck \u0026\u0026 pnpm --filter @super-restaurant/web test \u0026\u0026 pnpm --filter @super-restaurant/web build en verde, con capturas en escritorio y 390x844 con consola limpia"
-                                     ],
-                      "etaMin":  180,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  54,
-                      "parent":  "TODO-P3",
-                      "note":  "Nivel C (UI de pendientes). Solo consume API y almacenamiento local vÃ­a lib/offline; no calcula dinero ni decide permisos. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-web-offline-pos-cash",
-                      "title":  "OperaciÃ³n offline en Web POS (catÃ¡logo/mesas cacheados, orden local, efectivo y ticket pendiente)",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/web/src/lib/offline-pos.ts",
-                                    "apps/web/src/lib/offline-pos.test.ts",
-                                    "apps/web/src/lib/print-documents.ts",
-                                    "apps/web/src/lib/print-documents.test.ts",
-                                    "apps/web/src/app/app/capture/",
-                                    "apps/web/src/app/app/caja/",
-                                    "apps/web/src/app/app/orders/",
-                                    "apps/web/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-web-sync-status-ui"
-                               ],
-                      "acceptance":  [
-                                         "sin WAN permite consultar menÃº/mesas cacheados (mostrando versiÃ³n/fecha), crear Ã³rdenes locales, agregar lÃ­neas a Ã³rdenes originadas en este dispositivo, registrar efectivo offline con precondiciones de caja/cajero/secuencia e imprimir ticket marcado explÃ­citamente como \u0027Pendiente de sincronizar (solo este dispositivo)\u0027",
-                                         "bloquea explÃ­citamente con explicaciÃ³n en espaÃ±ol las operaciones prohibidas offline (editar Ã³rdenes de otro dispositivo, descuentos/cancelaciones que exigen supervisor, cierre de caja, reembolsos y CFDI) sin encolarlas",
-                                         "las operaciones confirmadas localmente solo se anuncian como local_pending tras el commit atÃ³mico en DeviceSyncEngine; nunca afirma entrega a cocina ni a otros equipos sin WAN",
-                                         "pnpm --filter @super-restaurant/web lint \u0026\u0026 pnpm --filter @super-restaurant/web typecheck \u0026\u0026 pnpm --filter @super-restaurant/web test \u0026\u0026 pnpm --filter @super-restaurant/web build en verde, con capturas en escritorio y 390x844 con consola limpia"
-                                     ],
-                      "etaMin":  240,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  59,
-                      "parent":  "TODO-P3",
-                      "note":  "Nivel C. Serializado tras m2-web-sync-status-ui para evitar conflicto en apps/web/package.json y reutilizar el proveedor de estado de sincronizaciÃ³n. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-mobile-offline-sync-ui",
-                      "title":  "IntegraciÃ³n offline y UI de conectividad/pendientes en apps/mobile",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "C",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "apps/mobile/src/ui/sync-banner.tsx",
-                                    "apps/mobile/src/ui/pending-sync-screen.tsx",
-                                    "apps/mobile/src/ui/app.tsx",
-                                    "apps/mobile/src/ui/order-draft-screen.tsx",
-                                    "apps/mobile/src/mobile-state.ts",
-                                    "apps/mobile/src/mobile-state.test.ts",
-                                    "apps/mobile/src/order-submission.ts",
-                                    "apps/mobile/src/order-submission.test.ts",
-                                    "apps/mobile/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-mobile-local-storage-crypto"
-                               ],
-                      "acceptance":  [
-                                         "apps/mobile conecta DeviceSyncEngine para consultar menÃº/mesas cacheados, encolar Ã³rdenes locales y cobros en efectivo permitidos por matriz, y bloquear acciones restringidas con explicaciÃ³n clara",
-                                         "muestra banner persistente de conectividad/sucursal/pendientes/Ãºltimo sync y pantalla de cola con detalle de errores, reintentos y conflictos sin alert/confirm/prompt y con targets tÃ¡ctiles \u003e= 44 px",
-                                         "pnpm --filter @super-restaurant/mobile lint \u0026\u0026 pnpm --filter @super-restaurant/mobile typecheck \u0026\u0026 pnpm --filter @super-restaurant/mobile test \u0026\u0026 pnpm --filter @super-restaurant/mobile build en verde",
-                                         "verificaciÃ³n visual en viewport 390x844 (Expo web o emulador objetivo; si solo se verifica en Expo web, documentar limitaciÃ³n de dispositivo nativo)"
-                                     ],
-                      "etaMin":  210,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  63,
-                      "parent":  "TODO-P3",
-                      "note":  "Nivel C (UI mÃ³vil). Corre en paralelo con m2-kds-offline-cache y m2-web-offline-pos-cash sin compartir rutas. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-test-sync-engine-failures",
-                      "title":  "Pruebas mecÃ¡nicas de failure injection del motor en packages/sync-engine",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "packages/sync-engine/src/failure-injection.test.ts",
-                                    "packages/sync-engine/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-sync-contracts-engine"
-                               ],
-                      "acceptance":  [
-                                         "cubre los escenarios de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX Â§5 aplicables al motor: caÃ­da antes/despuÃ©s del commit atÃ³mico, timeout post-commit con recuperaciÃ³n duplicate, push accepted + pull fallido preservando pullCursor, lotes fuera de orden, 20 reenvÃ­os concurrentes, reloj manipulado, schemaVersion atrasado, cola grande con backoff y rechazo estricto de PAN/CVV/secretos",
-                                         "valida que operaciones no habilitadas por matriz se bloquean antes de encolar y que eventos financieros pendientes nunca se purgan en compactaciÃ³n",
-                                         "pnpm --filter @super-restaurant/sync-engine lint \u0026\u0026 pnpm --filter @super-restaurant/sync-engine typecheck \u0026\u0026 pnpm --filter @super-restaurant/sync-engine test en verde"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  35,
-                      "parent":  "m1-coverage-inventory",
-                      "note":  "Tests mecÃ¡nicos en carril opencode. Se desbloquea en la ola 2 inmediatamente despuÃ©s de m2-sync-contracts-engine."
-                  },
-                  {
-                      "id":  "m2-test-sync-merge-matrix",
-                      "title":  "Pruebas exhaustivas de matriz de conflictos y merge determinista en packages/domain",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "packages/domain/src/sync-merge-matrix.test.ts",
-                                    "packages/domain/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-sync-merge-domain"
-                               ],
-                      "acceptance":  [
-                                         "ejercita las 15 filas aplicables de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX Â§4.2: lÃ­neas aditivas en orden abierta, ediciÃ³n concurrente de cantidad/precio/descuento, cancelaciÃ³n vs preparaciÃ³n, KDS doble estaciÃ³n, disputa de mesa, cobro efectivo con misma y distinta idempotencyKey, card_manual, tombstones y orden independiente de occurredAt",
-                                         "verifica invariantes monetarios sin float (minor units exactos) y cero fusiones LWW en casos financieros o crÃ­ticos",
-                                         "pnpm --filter @super-restaurant/domain lint \u0026\u0026 pnpm --filter @super-restaurant/domain typecheck \u0026\u0026 pnpm --filter @super-restaurant/domain test en verde"
-                                     ],
-                      "etaMin":  120,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  37,
-                      "parent":  "m1-coverage-inventory",
-                      "note":  "Tests mecÃ¡nicos en carril opencode. Corre en paralelo con m2-sync-sql-migrations tras fusionar m2-sync-merge-domain."
-                  },
-                  {
-                      "id":  "m2-api-sync-conflicts-tests",
-                      "title":  "Pruebas de integraciÃ³n HTTP + PostgreSQL 17 de conflictos con dos dispositivos, revocaciÃ³n y aislamiento",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "apps/api/src/operations/http-flow-sync-conflicts.ts",
-                                    "apps/api/src/sync/sync-conflicts.local.test.ts",
-                                    "apps/api/package.json"
-                                ],
-                      "deps":  [
-                                   "m2-api-sync-pull-review"
-                               ],
-                      "acceptance":  [
-                                         "simula dos dispositivos offline contra PostgreSQL 17 desechable en dos restaurantes y dos sucursales: dos dispositivos agregan lÃ­neas distintas a una mesa/orden (combinan con total server-side), ediciÃ³n concurrente de misma lÃ­nea/mesa (conflict/manual_review), cancelaciÃ³n vs KDS preparando (sin retroceso KDS), cobro repetido con misma clave (duplicate, 1 pago) y con clave distinta excedente (manual_review sin doble cobro)",
-                                         "verifica rechazo de actor y dispositivo revocados, 20 reenvÃ­os concurrentes produciendo un solo efecto, aislamiento total cross-restaurant y cross-branch en push/pull/cursor/dedup/tombstone, y no-visibilidad entre dispositivos antes de sincronizar (no-garantÃ­a LAN)",
-                                         "pnpm --filter @super-restaurant/api test \u0026\u0026 pnpm --filter @super-restaurant/api run test:sync-conflicts:local en verde en local y pg-verify"
-                                     ],
-                      "etaMin":  180,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  53,
-                      "parent":  "TODO-P3",
-                      "note":  "Pruebas de integraciÃ³n en carril opencode. Valida los criterios de salida de conflictos multi-dispositivo de plan-autonomo-100.md Â§1 M2 y TODO Fase 3. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-e2e-offline-web",
-                      "title":  "Suite Playwright e2e:offline real (PWA, recarga sin pÃ©rdida, reconexiÃ³n y conflicto 2 dispositivos)",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "opencode",
-                      "paths":  [
-                                    "apps/web/e2e/offline.spec.ts",
-                                    "apps/web/e2e/offline-conflicts.spec.ts",
-                                    "apps/web/e2e/fixtures/offline-helpers.ts",
-                                    "apps/web/playwright.config.ts",
-                                    "apps/web/playwright.ci.config.ts"
-                                ],
-                      "deps":  [
-                                   "m2-web-pwa-shell",
-                                   "m2-web-sync-status-ui",
-                                   "m2-web-offline-pos-cash"
-                               ],
-                      "acceptance":  [
-                                         "actualiza apps/web/e2e/offline.spec.ts de modo informativo a aserciones reales de Fase 3: PWA carga offline, menÃº/mesas cacheados legibles, alta de orden + efectivo offline + ticket pendiente sobreviven recarga completa sin red, acciones prohibidas se bloquean con mensaje claro y al reconectar sincronizan sin duplicar",
-                                         "apps/web/e2e/offline-conflicts.spec.ts ejecuta dos contextos de navegador aislados offline sobre la misma mesa/orden y verifica la detecciÃ³n visible de conflicto y el flujo de manual_review en /app/sync sin alert/confirm/prompt ni pageerror",
-                                         "datos semilla deterministas con runId y cleanup obligatorio; cero overlays de Next ni errores de consola",
-                                         "pnpm --filter @super-restaurant/web e2e:typecheck \u0026\u0026 pnpm --filter @super-restaurant/web e2e:offline en verde contra API y web locales"
-                                     ],
-                      "etaMin":  210,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  59,
-                      "parent":  "m1-coverage-inventory",
-                      "note":  "Puerta E2E principal de M2 en carril opencode. Sustituye el spec informativo actual por la verificaciÃ³n offline real requerida por plan-autonomo-100.md Â§1 M2. Fusionado en main (verificado 2026-11-25)."
-                  },
-                  {
-                      "id":  "m2-docs-offline-matrix-signoff",
-                      "title":  "Consolidar matriz offline verificada por cliente/operaciÃ³n y runbook de verificaciÃ³n M2",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "D",
-                      "lane":  "agy",
-                      "paths":  [
-                                    "docs/architecture/OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md",
-                                    "docs/runbooks/offline-verification.md"
-                                ],
-                      "deps":  [
-                                   "o0-web-leader",
-                                   "o0-web-purge",
-                                   "o0-mobile-banner-tests",
-                                   "o0-visual-assert",
-                                   "o0-sync-p3"
-                               ],
-                      "acceptance":  [
-                                         "docs/architecture/OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md actualiza el estado por cada cliente (Web POS, Mobile, KDS) y operaciÃ³n enlazando exactamente las pruebas automatizadas que lo demuestran y manteniendo explÃ­cita la exclusiÃ³n de Fase 3B/LAN, tarjeta integrada, CFDI, reembolsos e inventario",
-                                         "docs/runbooks/offline-verification.md documenta comandos reproducibles (e2e:offline, test:sync-conflicts:local, verify:sync-schema:rollback), lÃ­mites conocidos de plataforma/hardware y checklist de prueba humana de cierre de M2",
-                                         "solo documentaciÃ³n; git diff --check en verde"
-                                     ],
-                      "etaMin":  90,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  79,
-                      "parent":  "M2",
-                      "note":  "Cierre formal en docs/agentic/m2-offline-signoff.md; migraciones remotas y verificacion en dispositivo quedan como puertas humanas."
-                  },
-                  {
-                      "id":  "o0-web-leader",
-                      "title":  "Eleccion de lider entre pestanas y protocolo STORAGE_COMMIT_FAILED probado en el motor",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "apps/web/src/lib/offline/sync-leader.ts",
-                                    "apps/web/src/lib/offline/sync-leader.test.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "sync-leader.ts expone liderazgo exclusivo por deviceId via Web Locks + BroadcastChannel y libera al cerrar",
-                                         "prueba: segundo motor no escribe mientras el lider vive; al perder el lock el motor se descarta y recarga con la misma idempotency key",
-                                         "pnpm --filter @super-restaurant/web lint/typecheck en verde y la prueba nueva corre con salida real"
-                                     ],
-                      "etaMin":  30,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  73,
-                      "parent":  null,
-                      "note":  "P2 de #62 (debt.md). No tocar apps/web/package.json (lo hace o0-wire)."
-                  },
-                  {
-                      "id":  "o0-web-purge",
-                      "title":  "Purga y rotacion del almacen cifrado web (sign-out, AUTH_REVOKED, keyVersion, AAD con scope)",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "apps/web/src/lib/offline/sync-store.ts",
-                                    "apps/web/src/lib/offline/sync-purge.ts",
-                                    "apps/web/src/lib/offline/sync-purge.test.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "purga en sign-out limpio y bloqueo+purga de replica en AUTH_REVOKED conservando outbox con evidencia",
-                                         "keyVersion rotada y AAD incluye restaurantId/branchId como defensa en profundidad",
-                                         "pruebas nuevas cubren purga, bloqueo, rotacion y AAD incorrecta; salida real de test web"
-                                     ],
-                      "etaMin":  30,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  74,
-                      "parent":  null,
-                      "note":  "P2 de #62. sync-store.ts es de este item en exclusiva."
-                  },
-                  {
-                      "id":  "o0-mobile-banner-tests",
-                      "title":  "Pruebas del banner mobile: carrera !alive y ruta resume/locked",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "apps/mobile/src/ui/sync-banner.test.tsx"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "prueba de la carrera !alive (snapshot que llega tras desmontar no actualiza estado)",
-                                         "prueba de ruta resume/locked con copy de operador sin rutas ni codigos internos",
-                                         "pnpm --filter @super-restaurant/mobile test:typecheck y la prueba nueva en verde con salida real"
-                                     ],
-                      "etaMin":  20,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  75,
-                      "parent":  null,
-                      "note":  "P2 de #66 (debt.md). apps/mobile/package.json lo edita o0-wire."
-                  },
-                  {
-                      "id":  "o0-visual-assert",
-                      "title":  "Helper de aserciones visuales sin vision y spec offline KDS",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "C",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "apps/web/src/lib/visual-assert.ts",
-                                    "apps/web/src/lib/visual-assert.test.ts",
-                                    "apps/web/e2e/visual/assert-ui.ts",
-                                    "apps/web/e2e/visual/offline-kds.spec.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "visual-assert.ts puro: umbral 44x44, sin desborde horizontal, foco visible, sin alert/confirm/prompt, cero errores de consola y red \u003e=400",
-                                         "prueba unitaria de cada regla con salida real",
-                                         "spec @offline-visual en 1280x800 y 390x844 que se omite sin E2E_VISUAL=1 y guarda capturas en docs/agentic/visual-m2/"
-                                     ],
-                      "etaMin":  25,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  76,
-                      "parent":  null,
-                      "note":  "Â§5.3 del plan. No corre en CI (playwright.ci.config.ts no lo incluye)."
-                  },
-                  {
-                      "id":  "o0-sync-p3",
-                      "title":  "P3 de sync: DEVICE_UNKNOWN, ACTOR_MISMATCH, log de rechazo y timeout de transporte web",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "apps/api/src/sync",
-                                    "apps/web/src/lib/offline/sync-transport.ts",
-                                    "apps/web/src/lib/offline/sync-transport.test.ts"
-                                ],
-                      "deps":  [
-
-                               ],
-                      "acceptance":  [
-                                         "el ejecutor distingue DEVICE_UNKNOWN de DEVICE_REVOKED y ACTOR_MISMATCH de AUTH_REVOKED",
-                                         "rechazo con log estructurado sin token ni PII",
-                                         "transporte web con timeout de 30 s por defecto y prueba que cubre el corte",
-                                         "pnpm --filter @super-restaurant/api test y la prueba de transporte en verde con salida real"
-                                     ],
-                      "etaMin":  25,
-                      "attempts":  0,
-                      "status":  "done",
-                      "sessionId":  null,
-                      "pr":  77,
-                      "parent":  null,
-                      "note":  "P3 de #60/#65."
-                  },
-                  {
-                      "id":  "o0-wire",
-                      "title":  "Cableado de Ola 0: registrar pruebas nuevas en los scripts de test",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "B",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "apps/web/package.json",
-                                    "apps/mobile/package.json"
-                                ],
-                      "deps":  [
-                                   "o0-web-leader",
-                                   "o0-web-purge",
-                                   "o0-mobile-banner-tests",
-                                   "o0-visual-assert"
-                               ],
-                      "acceptance":  [
-                                         "apps/web/package.json test ejecuta sync-leader, sync-purge y visual-assert con el patron tsc --ignoreConfig existente",
-                                         "apps/mobile/package.json test ejecuta sync-banner.test",
-                                         "pnpm --filter @super-restaurant/web test y --filter mobile test en verde con salida real"
-                                     ],
-                      "etaMin":  10,
-                      "attempts":  0,
-                      "status":  "review",
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "Unico escritor de package.json en la ola."
-                  },
-                  {
-                      "id":  "o0-rev-web-leader",
-                      "title":  "Revision dsh de o0-web-leader",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "docs/agentic/debt.md"
-                                ],
-                      "deps":  [
-                                   "o0-web-leader"
-                               ],
-                      "acceptance":  [
-                                         "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
-                                         "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
-                                         "sin tocar codigo de produccion"
-                                     ],
-                      "etaMin":  10,
-                      "attempts":  0,
-                      "status":  "todo",
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "Revisor de o0-web-leader."
-                  },
-                  {
-                      "id":  "o0-rev-web-purge",
-                      "title":  "Revision dsh de o0-web-purge",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "docs/agentic/debt.md"
-                                ],
-                      "deps":  [
-                                   "o0-web-purge"
-                               ],
-                      "acceptance":  [
-                                         "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
-                                         "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
-                                         "sin tocar codigo de produccion"
-                                     ],
-                      "etaMin":  10,
-                      "attempts":  0,
-                      "status":  "todo",
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "Revisor de o0-web-purge."
-                  },
-                  {
-                      "id":  "o0-rev-mobile-banner",
-                      "title":  "Revision dsh de o0-mobile-banner-tests",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "docs/agentic/debt.md"
-                                ],
-                      "deps":  [
-                                   "o0-mobile-banner-tests"
-                               ],
-                      "acceptance":  [
-                                         "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
-                                         "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
-                                         "sin tocar codigo de produccion"
-                                     ],
-                      "etaMin":  10,
-                      "attempts":  0,
-                      "status":  "todo",
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "Revisor de o0-mobile-banner-tests."
-                  },
-                  {
-                      "id":  "o0-rev-visual",
-                      "title":  "Revision dsh de o0-visual-assert",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "docs/agentic/debt.md"
-                                ],
-                      "deps":  [
-                                   "o0-visual-assert"
-                               ],
-                      "acceptance":  [
-                                         "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
-                                         "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
-                                         "sin tocar codigo de produccion"
-                                     ],
-                      "etaMin":  10,
-                      "attempts":  0,
-                      "status":  "todo",
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "Revisor de o0-visual-assert."
-                  },
-                  {
-                      "id":  "o0-rev-sync-p3",
-                      "title":  "Revision dsh de o0-sync-p3",
-                      "milestone":  "M2",
-                      "phase":  3,
-                      "level":  "A",
-                      "lane":  "dsh",
-                      "paths":  [
-                                    "docs/agentic/debt.md"
-                                ],
-                      "deps":  [
-                                   "o0-sync-p3"
-                               ],
-                      "acceptance":  [
-                                         "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
-                                         "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
-                                         "sin tocar codigo de produccion"
-                                     ],
-                      "etaMin":  10,
-                      "attempts":  0,
-                      "status":  "todo",
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "Revisor de o0-sync-p3."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  87,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-dom-units",
-                                   "m3-dom-ledger",
-                                   "m3-dom-costing",
-                                   "m3-dom-recipe"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-dom-wire",
-                      "title":  "Exportar modulos de inventario e registrar suites de dominio",
-                      "level":  "B",
-                      "paths":  [
-                                    "packages/domain/src/index.ts",
-                                    "packages/domain/package.json"
-                                ]
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  86,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-sql-catalog"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-sql-ledger",
-                      "title":  "Ledger inmutable con saldo derivado y funcion idempotente",
-                      "level":  "A",
-                      "paths":  [
-                                    "supabase/migrations/20261126000200_inventory_ledger.sql",
-                                    "supabase/tests/inventory_ledger_invariants.sql"
-                                ]
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  89,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-sql-ledger"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-sql-recipes",
-                      "title":  "Recetas versionadas con snapshot",
-                      "level":  "A",
-                      "paths":  [
-                                    "supabase/migrations/20261126000300_inventory_recipes.sql",
-                                    "supabase/tests/inventory_recipes_invariants.sql"
-                                ]
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  91,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-sql-recipes"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-sql-purchasing",
-                      "title":  "Proveedores, ordenes de compra y recepcion",
-                      "level":  "A",
-                      "paths":  [
-                                    "supabase/migrations/20261126000400_inventory_purchasing.sql"
-                                ],
-                      "note":  "PR #91 fusionado: idempotencia por sucursal+clave, auditoria de recepcion y pruebas de dinero; revision doble dsh."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-sql-purchasing",
-                                   "m3-map-sale-hooks"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-sql-sale-consumption",
-                      "title":  "Consumo por venta y reverso idempotentes",
-                      "level":  "A",
-                      "paths":  [
-                                    "supabase/migrations/20261126000500_inventory_sale_consumption.sql"
-                                ],
-                      "note":  "Migracion 00500 + 00700 y cableado API en la rama m3-sql-sale-consumption: is_default por sucursal, eventos comando+pasos, reverso compensado, cancelacion de linea. Verificador 84 migraciones verde y test:http:local 7/7. Falta el E2E applied del wrapper de confirmacion (m3-int-sale-to-stock)."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  88,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-dom-wire"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-contracts",
-                      "title":  "DTOs y parsers de inventario en shared-types",
-                      "level":  "A",
-                      "paths":  [
-                                    "packages/shared-types/src/inventory"
-                                ]
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  90,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-contracts"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-api-items",
-                      "title":  "API de insumos y almacenes",
-                      "level":  "B",
-                      "paths":  [
-                                    "apps/api/src/inventory"
-                                ],
-                      "note":  "PR #90 fusionado: 8 funciones app_private SECURITY DEFINER, mapeo de errores 23503/23514/42501; revision doble dsh."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-contracts"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-api-movements",
-                      "title":  "API de movimientos manuales con supervisor y motivo",
-                      "level":  "A",
-                      "paths":  [
-                                    "apps/api/src/inventory"
-                                ],
-                      "note":  "PR #99 fusionado: transferencia atomica con lock, ajuste/merma/conteo, listados de movimientos/saldos; revision A con P2 corregidos."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-contracts"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-api-recipes",
-                      "title":  "API de recetas",
-                      "level":  "B",
-                      "paths":  [
-                                    "apps/api/src/inventory"
-                                ],
-                      "note":  "PR #100: publicar/listar/leer recetas versionadas; P2 de doble transaccion corregido devolviendo la version publicada."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-contracts"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-api-purchasing",
-                      "title":  "API de compras y recepcion",
-                      "level":  "A",
-                      "paths":  [
-                                    "apps/api/src/inventory"
-                                ]
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-contracts"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-api-alerts-costing",
-                      "title":  "API de alertas, costo promedio y margen",
-                      "level":  "B",
-                      "paths":  [
-                                    "apps/api/src/inventory"
-                                ],
-                      "note":  "PR #106: alertas por minimo, costo medio entero con resto, coste de receta y margen estimado; PG 88 migraciones y revision B APROBAR."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-api-wire"
-                               ],
-                      "status": "done",
-                      "id": "m3-web-inventario",
-                      "title": "UI web de inventario (insumos, movimientos, conteo, recetas, compras, alertas)",
-                      "level": "C",
-                      "paths": [
-                                    "apps/web/src/app/app/inventario"
-                                ],
-                      "note": "PR #99 Insumos/Almacenes, #108 Movimientos, #109 Recetas, #113 Compras, #114 Alertas/costos y #125 Almacén predeterminado (isDefault). Pase visual real 12/12 (6 pestañas × 1366×800 y 390×844) en docs/agentic/visual-verify-2026-11-26/."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-sql-sale-consumption"
-                               ],
-                      "status":  "done",
-                      "id":  "m3-int-sale-to-stock",
-                      "title":  "Integracion venta-cancelacion contra existencias",
-                      "level":  "A",
-                      "paths":  [
-                                    "apps/api/src/inventory"
-                                ],
-                      "note":  "PR #104: flujo http_flow_inventory (8/8) con almacen default, receta, consumo 240 g, replay sin duplicar, reverso y linea sin receta inerte; revision A APROBAR."
-                  },
-                  {
-                      "attempts":  0,
-                      "sessionId":  null,
-                      "pr":  null,
-                      "parent":  null,
-                      "note":  "",
-                      "milestone":  "M3",
-                      "phase":  4,
-                      "lane":  "dsh",
-                      "deps":  [
-                                   "m3-web-inventario"
-                               ],
-                      "status": "done",
-                      "id": "m3-e2e-journey",
-                      "title": "Journey E2E de inventario",
-                      "level": "B",
-                      "paths": [
-                                    "apps/web/e2e/journeys"
-                                ],
-                      "pr": 123,
-                      "note": "PR #123: journey-13-inventario.spec.ts verde en 1.7 min contra el stack local. Siembra con runId, asegura el almacén predeterminado (isDefault), restaura la receta previa y arma el plan con los helpers de captura (mitades). Verificado: la venta consume 120 g, alerta con déficit, margen, ajuste y cancelación con sale_reversal."
-                  }
-              ]
+    "version": "2.0.0",
+    "milestone": "M2/ola-0",
+    "updatedAt": "2026-11-26",
+    "source": "docs/plans/plan-deepseek-fases-3-8.md",
+    "notes": "M1/M2 cerrados (M2 con puertas humanas). M3: API de inventario completa y UI con insumos, recetas, almacenes, movimientos, compras, alertas y costos (#99-#114); contratos HTTP de inventario en verde; faltan journey E2E, pase visual real y el cierre de deuda P3.",
+    "items": [
+        {
+            "id": "m1-z2b-confirm-pizza-v2",
+            "title": "Reconstruir confirm_capture_draft_v3 sobre el cuerpo v2 y probar pizza+zona",
+            "milestone": "M1",
+            "phase": 1,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "supabase/migrations/20261121000100_delivery_zones_settlements.sql",
+                "supabase/tests/pizza_model_v2_invariants.sql",
+                "supabase/tests/delivery_zones_invariants.sql"
+            ],
+            "deps": [],
+            "acceptance": [
+                "pnpm --filter @super-restaurant/api verify:pizza-model-v2-schema:rollback en verde sobre PostgreSQL 17 local desde cero",
+                "prueba nueva pizza+zona confirma sin 42703 (record \"product\" has no field \"base_group_id\")",
+                "prueba negativa del invariante delivery_zones_coverage_nonempty rechaza una zona sin cobertura",
+                "supabase/tests/pizza_model_v2_invariants.sql y delivery_zones_invariants.sql pasan sin tolerancia en el job pg-verify",
+                "git diff --check"
+            ],
+            "etaMin": 180,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 51,
+            "parent": "M0-7",
+            "note": "P1 abierto desde el smoke r2; migración 20261121000100 no aplicada en remoto. La reconstrucción reutiliza el cuerpo v2 de 20261120000100 (~1767). Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m1-pg-verify-clean",
+            "title": "Quitar las tolerancias de pg-verify y dejar los siete tests SQL conocidos en verde",
+            "milestone": "M1",
+            "phase": 0,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                ".github/workflows/ci.yml",
+                "supabase/tests/capture_drafts_invariants.sql",
+                "supabase/tests/capture_repeat_order_invariants.sql",
+                "supabase/tests/capture_selection_plan_invariants.sql",
+                "supabase/tests/menu_shared_modifier_groups_invariants.sql",
+                "supabase/tests/order_deliveries_invariants.sql"
+            ],
+            "deps": [
+                "m1-z2b-confirm-pizza-v2"
+            ],
+            "acceptance": [
+                "KNOWN_FAILING_SQL_TESTS queda vacío o se elimina de .github/workflows/ci.yml",
+                "se restaura verify:pizza-model-v2-schema:rollback en el paso de verificadores y se quita el continue-on-error de Run local HTTP flow",
+                "job pg-verify en verde en un PR (migraciones desde cero, supabase/tests y verify:*:rollback)",
+                "git diff --check"
+            ],
+            "etaMin": 180,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 19,
+            "parent": "M0-7",
+            "note": "Cierra la deuda registrada en docs/agentic/debt.md §M0-7. Cada test tolerado se triage: se arregla o se documenta como P1/P2, no se vuelve a tolerar."
+        },
+        {
+            "id": "m1-resolve-address-settlement",
+            "title": "resolveAddress no propaga settlementId sin confirmar y devuelve settlement_unknown",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "apps/api/src/delivery-zones.ts",
+                "apps/api/src/delivery-zones.test.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "prueba nueva: una dirección sin asentamiento confirmado recibe settlement_unknown y no un settlementId inventado",
+                "el flujo de cotización sigue pasando settlementId: null y confirm relee la cuota manual en SQL, no del cliente",
+                "pnpm --filter @super-restaurant/api test en verde",
+                "pnpm --filter @super-restaurant/web typecheck en verde si consume el contrato"
+            ],
+            "etaMin": 90,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 11,
+            "parent": "review-smoke-r2-p2",
+            "note": "P2 de la revisión Sonnet del smoke r2 (apps/api/src/delivery-zones.ts ~646). Verificar también que dist/ no esté versionado."
+        },
+        {
+            "id": "m1-k0b-pickup-contact",
+            "title": "Contacto de Recoger en el borrador y regla Domicilio exige cliente en servidor",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "supabase/migrations/",
+                "apps/api/src/captures.ts",
+                "packages/shared-types/src/commercial-capture.ts",
+                "packages/shared-types/src/capture-selection-plan.ts"
+            ],
+            "deps": [
+                "m1-z2b-confirm-pizza-v2"
+            ],
+            "acceptance": [
+                "borrador de Recoger acepta nombre y teléfono de contacto sin exigir cliente",
+                "confirm_capture_order rechaza Domicilio sin cliente con error de dominio claro y prueba SQL",
+                "pnpm --filter @super-restaurant/api verify:capture-schema:rollback en verde (PostgreSQL local rollback-only)",
+                "pnpm lint && pnpm typecheck && pnpm test en verde",
+                "migración nueva versionada; no se edita ninguna aplicada"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 20,
+            "parent": "smoke-r2-k0",
+            "note": "Depende de liberar el carril de migraciones (M1-1). shared-types es carril de un solo escritor cuando el contrato lo consumen dos apps o más."
+        },
+        {
+            "id": "m1-mobile-pay-note",
+            "title": "Cobro (efectivo, tarjeta manual, transferencia) y nota de línea en mobile",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "apps/mobile/src/ui/order-draft-screen.tsx",
+                "apps/mobile/src/ui/components.tsx",
+                "apps/mobile/src/mobile-state.ts",
+                "apps/mobile/src/mobile-state.test.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "el mesero cobra y registra nota de línea desde mobile usando los endpoints existentes, sin cálculo de dinero en cliente",
+                "estados de carga, error y éxito explícitos; sin alert/confirm/prompt; targets de 44 px",
+                "pnpm --filter @super-restaurant/mobile test && pnpm --filter @super-restaurant/mobile typecheck && pnpm --filter @super-restaurant/mobile lint en verde",
+                "captura de pantalla real en 390x844 con consola limpia"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 44,
+            "parent": "mvp-mobile-60",
+            "note": "El servidor revalida montos; el cliente no decide permisos ni totales. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m1-kitchen-ready-notify",
+            "title": "Notificación «platillo listo» en web, KDS y mobile sobre el WebSocket existente",
+            "milestone": "M1",
+            "phase": 1,
+            "level": "B",
+            "lane": "agy",
+            "paths": [
+                "packages/shared-types/src/realtime.ts",
+                "apps/api/src/realtime.gateway.ts",
+                "apps/api/src/realtime.gateway.test.ts",
+                "apps/web/src/app/app/orders/",
+                "apps/kds/src/",
+                "apps/mobile/src/ui/active-orders-panel.tsx"
+            ],
+            "deps": [
+                "m1-mobile-pay-note"
+            ],
+            "acceptance": [
+                "al marcar una línea lista en KDS, web y mobile reciben el aviso sin recargar la página",
+                "el canal respeta branchId y stationId; una sucursal o estación ajena nunca recibe el evento",
+                "pnpm --filter @super-restaurant/api test y pnpm --filter @super-restaurant/kds test en verde",
+                "verificación en navegador real con consola limpia"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 16,
+            "parent": "mvp-kds-80",
+            "note": "Dependencia de mobile solo por el directorio UI compartido; si el orquestador reparte, serializar ese archivo."
+        },
+        {
+            "id": "m1-k0b2-customer-open-captures",
+            "title": "K0-B2: capturas abiertas por cliente (SQL+API+deep link)",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "supabase/migrations/",
+                "supabase/tests/",
+                "apps/api/src/captures.ts",
+                "apps/api/src/customer-order-history.ts",
+                "apps/web/src/app/app/capture/"
+            ],
+            "deps": [
+                "m1-k0b-pickup-contact"
+            ],
+            "acceptance": [
+                "funcion SQL y endpoint listan borradores abiertos por customerId acotados a restaurantId/branchId y permiso customers.read",
+                "/app/capture?draftId= retoma el borrador",
+                "migracion nueva con guards, prueba SQL en supabase/tests cableada en CI, pruebas de aislamiento",
+                "lint typecheck test del alcance en verde"
+            ],
+            "etaMin": 150,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": "superrestaurant-29",
+            "pr": 26,
+            "parent": "smoke-r2-k3",
+            "note": "Desbloquea K3 (-26 reporto falta de fuente server-side)."
+        },
+        {
+            "id": "m1-k3-customer-captures",
+            "title": "K3: capturas abiertas del cliente en su ficha",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "C",
+            "lane": "opencode",
+            "paths": [
+                "apps/web/src/app/app/customers/",
+                "apps/api/src/customer-directory.ts",
+                "apps/api/src/customer-order-history.ts"
+            ],
+            "deps": [
+                "m1-k0b-pickup-contact",
+                "m1-k0b2-customer-open-captures"
+            ],
+            "acceptance": [
+                "la ficha del cliente lista sus capturas abiertas y permite retomarlas",
+                "consulta acotada a restaurantId/branchId y permiso customers.read en servidor",
+                "pnpm --filter @super-restaurant/web test y typecheck en verde",
+                "captura real en escritorio y 390x844 con consola limpia"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": "superrestaurant-36",
+            "pr": 32,
+            "parent": "smoke-r2-k3",
+            "note": "Después de K0-B; K4 (confirmación de borrado de teléfono) ya está integrado."
+        },
+        {
+            "id": "m1-e2e-journeys-1-6",
+            "title": "Specs Playwright de los journeys 1-6 contra PostgreSQL local",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "apps/web/e2e/journeys/",
+                "apps/web/e2e/fixtures/"
+            ],
+            "deps": [
+                "m1-z2b-confirm-pizza-v2"
+            ],
+            "acceptance": [
+                "existe una spec determinista por journey 1, 2, 3, 4, 5 y 6 en apps/web/e2e/journeys/",
+                "datos semilla deterministas y aislamiento por runId, con cleanup obligatorio",
+                "pnpm --filter @super-restaurant/web e2e:all en verde contra API y web locales",
+                "pnpm --filter @super-restaurant/web e2e:typecheck en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 21,
+            "parent": "M1-journeys",
+            "note": "Journeys del plan maestro §4.2: 1 abrir turno/caja; 2 iniciar o recuperar orden; 3 cliente y dirección; 4 configurar producto; 5 guardar en espera y cancelar; 6 confirmar precio, pago y enviar a estación."
+        },
+        {
+            "id": "m1-e2e-journeys-7-12",
+            "title": "Specs Playwright de los journeys 7-12 contra PostgreSQL local",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "apps/web/e2e/journeys/",
+                "apps/web/e2e/fixtures/"
+            ],
+            "deps": [
+                "m1-e2e-journeys-1-6"
+            ],
+            "acceptance": [
+                "existe una spec determinista por journey 7, 8, 9, 10, 11 y 12 (12 puede ser online-first: reconexión sin duplicar)",
+                "reutiliza helpers y fixtures de M1-8 sin duplicarlos",
+                "pnpm --filter @super-restaurant/web e2e:all en verde contra API y web locales",
+                "pnpm --filter @super-restaurant/web e2e:typecheck en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 24,
+            "parent": "M1-journeys",
+            "note": "Journeys: 7 preparar/listo/asignar reparto; 8 descuento y cortesía con autorización; 9 pagos mixtos sin duplicados; 10 imprimir y cerrar con historial; 11 cerrar caja y conciliar; 12 continuidad ante pérdida de red."
+        },
+        {
+            "id": "m1-coverage-inventory",
+            "title": "Inventario de cobertura obligatoria (§4.4) y sus huecos como ítems",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "D",
+            "lane": "agy",
+            "paths": [
+                "docs/agentic/coverage-m1.md"
+            ],
+            "deps": [],
+            "acceptance": [
+                "docs/agentic/coverage-m1.md marca cubierto/faltante por cada área de §4.4 con archivo o prueba que lo demuestra",
+                "cada hueco queda listado con nivel y motor propuesto para entrar al backlog con parent",
+                "solo lectura sobre el código; no toca fuentes ni SQL"
+            ],
+            "etaMin": 90,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 10,
+            "parent": "M1",
+            "note": "Áreas: aislamiento entre restaurantes/sucursales, dinero y redondeo, máquinas de estado, doble envío/doble cobro, cancelación/reembolso, reconexión y conflictos offline, inventario compensatorio, permisos de supervisor, migraciones desde cero y sobre la versión anterior."
+        },
+        {
+            "id": "m1-sec-rate-limit",
+            "title": "Rate limiting en auth, pagos y caja, con repaso de sanitización y RBAC",
+            "milestone": "M1",
+            "phase": 0,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "apps/api/src/auth/",
+                "apps/api/src/payments.ts",
+                "apps/api/src/operational-shifts.ts",
+                "apps/api/src/config.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "límites de tasa activos en login, cobro y caja; respuesta 429 sin filtrar secretos",
+                "prueba de aislamiento entre restaurantes y de permiso denegado sigue en verde",
+                "entradas validadas y sanitizadas; ningún secreto en logs",
+                "pnpm lint && pnpm typecheck && pnpm test en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 50,
+            "parent": "M1-produccion",
+            "note": "Nivel A: revisión doble de familias distintas y pruebas de invariantes G4. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m1-obs-health",
+            "title": "Health/readiness, logs con correlationId y métricas mínimas",
+            "milestone": "M1",
+            "phase": 0,
+            "level": "B",
+            "lane": "codex",
+            "paths": [
+                "apps/api/src/health.controller.ts",
+                "apps/api/src/main.ts",
+                "apps/api/src/app-setup.ts",
+                "apps/api/src/operations/"
+            ],
+            "deps": [],
+            "acceptance": [
+                "GET /health y /ready distinguen proceso vivo de dependencias listas",
+                "cada request lleva correlationId en los logs; restaurantId/branchId/orderId cuando aplique",
+                "métricas mínimas de errores y latencia expuestas sin datos personales",
+                "pnpm --filter @super-restaurant/api test && typecheck en verde"
+            ],
+            "etaMin": 180,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 23,
+            "parent": "M1-produccion",
+            "note": "No registrar secretos, tokens ni payloads personales completos."
+        },
+        {
+            "id": "m1-runbooks-release",
+            "title": "Runbooks de deploy, respaldo/restauración, RPO/RTO y rollback",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "D",
+            "lane": "agy",
+            "paths": [
+                "docs/runbooks/deploy.md",
+                "docs/runbooks/backup-restore.md",
+                "docs/runbooks/rollback.md"
+            ],
+            "deps": [],
+            "acceptance": [
+                "los tres runbooks existen con comandos exactos, prerrequisitos y verificación posterior",
+                "el de respaldo define RPO/RTO y una prueba de restauración reproducible",
+                "git diff --check"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 43,
+            "parent": "M1-produccion",
+            "note": "Solo documentación; el hosting y la política de respaldo real siguen siendo decisión humana (DECISIONS_PENDING.md). Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m1-visual-verify-r2",
+            "title": "Verificación visual de B2, B3, B4, Z4, Z5, K1, K2 y K4 en escritorio y 390x844",
+            "milestone": "M1",
+            "phase": 2,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "docs/agentic/visual-verify-r2.md"
+            ],
+            "deps": [],
+            "acceptance": [
+                "capturas reales de cada pantalla en escritorio y 390x844, consola limpia y targets de 44 px",
+                "ningún alert/confirm/prompt; contraste y foco visibles",
+                "hallazgos P1/P2 se reportan con captura y ruta; P3 va a debt.md",
+                "solo lectura: no modifica código"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 18,
+            "parent": "smoke-r2-visual",
+            "note": "Estas pantallas ya están en main tras la integración de feat/smoke-r1. Login con tools/agentic/local-servers/e2e-auth.bat."
+        },
+        {
+            "id": "m1-menu-tabs-r2",
+            "title": "Pestañas Categorías/Productos/Modificadores/Tamaños y anchos de inputs en el editor de menú",
+            "milestone": "M1",
+            "phase": 1,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "apps/web/src/app/app/menu/"
+            ],
+            "deps": [],
+            "acceptance": [
+                "las cuatro pestañas conservan estado y no recargan el editor",
+                "anchos de inputs consistentes y Duplicar junto a Activo",
+                "pnpm --filter @super-restaurant/web test && typecheck && lint en verde",
+                "captura real en escritorio y 390x844 con consola limpia"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 15,
+            "parent": "TODO-menu-tabs-r2",
+            "note": "P2 ya integrado; esta ronda es solo presentación. Depende de no haber otro ítem abierto en apps/web/src/app/app/menu/."
+        },
+        {
+            "id": "m2-adr-005-local-storage",
+            "title": "ADR-005: selección de almacenamiento local web/mobile, cifrado en reposo y límites offline",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "D",
+            "lane": "agy",
+            "paths": [
+                "docs/adr/ADR-005.md",
+                "docs/THIRD_PARTY_LICENSE_AUDIT.md"
+            ],
+            "deps": [],
+            "acceptance": [
+                "docs/adr/ADR-005.md evalúa opciones concretas para web (IndexedDB nativo vs Dexie vs RxDB) y mobile (expo-sqlite vs WatermelonDB vs alternativa compatible con Expo 57 / RN 0.86), justifica la elección y fija transacción atómica de DurableSyncStoragePort",
+                "define estrategia de cifrado en reposo y gestión de claves (Web Crypto AES-GCM en web; expo-secure-store + cifrado en mobile), purga/bloqueo al cerrar sesión o revocar dispositivo, cuota y manejo de corrupción",
+                "documenta compatibilidad de licencias en docs/THIRD_PARTY_LICENSE_AUDIT.md si se propone cualquier dependencia externa y fija supuestos conservadores de retención y límites de efectivo offline",
+                "solo documentación; no modifica código fuente, SQL ni pnpm-lock.yaml",
+                "git diff --check"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": "superrestaurant-32",
+            "pr": 29,
+            "parent": "M2-adr",
+            "note": "Resuelve ADR-005 pendiente en ADR-004, OFFLINE_SYNC_CONTRACT §14 y TODO Fase 3. Desbloquea los adaptadores de almacenamiento local y la PWA."
+        },
+        {
+            "id": "m2-sync-contracts-engine",
+            "title": "Contratos compartidos de sync en shared-types y endurecimiento de packages/sync-engine",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "packages/shared-types/src/sync.ts",
+                "packages/shared-types/src/sync.runtime.test.ts",
+                "packages/shared-types/src/index.ts",
+                "packages/shared-types/package.json",
+                "packages/sync-engine/src/contract.ts",
+                "packages/sync-engine/src/durable-state.ts",
+                "packages/sync-engine/src/engine.ts",
+                "packages/sync-engine/src/outbox-state.ts",
+                "packages/sync-engine/src/capability-guard.ts",
+                "packages/sync-engine/src/schema-migration.ts",
+                "packages/sync-engine/src/index.ts",
+                "packages/sync-engine/package.json"
+            ],
+            "deps": [],
+            "acceptance": [
+                "packages/shared-types/src/sync.ts publica y valida en runtime (claves exactas, sin float, scope obligatorio) SyncEnvelopeV1, SyncPushRequest/Response, SyncPullRequest/Response, ManualReviewCaseV1 y el catálogo versionado de entityType/operation de Fase 3",
+                "packages/sync-engine reutiliza los contratos de shared-types y agrega: guard de matriz de capacidades offline por cliente/operación, hook determinista de migración de schemaVersion, corrección de rollback con múltiples pendientes por entidad, compactación segura sin purgar financieros y resync por snapshot",
+                "pnpm --filter @super-restaurant/shared-types test && pnpm --filter @super-restaurant/sync-engine test en verde",
+                "pnpm lint && pnpm typecheck && pnpm test && pnpm build en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": "superrestaurant-34",
+            "pr": 31,
+            "parent": "m1-coverage-inventory",
+            "note": "Inicio de la cadena estricta de nivel A (carril codex). Toca packages/shared-types (carril de un solo escritor) y packages/sync-engine; requiere revisión doble y pruebas de invariantes G4."
+        },
+        {
+            "id": "m2-sync-merge-domain",
+            "title": "Reglas deterministas de merge y clasificación de conflictos offline en packages/domain",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "packages/domain/src/sync-merge.ts",
+                "packages/domain/src/sync-merge.test.ts",
+                "packages/domain/src/index.ts",
+                "packages/domain/package.json"
+            ],
+            "deps": [
+                "m2-sync-contracts-engine"
+            ],
+            "acceptance": [
+                "packages/domain/src/sync-merge.ts implementa sin dependencias de infraestructura ni float las reglas de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §4.2 para Order, OrderItem, DiningTable, KdsTicket, Payment y CashMovement",
+                "líneas aditivas con orderItemId distinto combinan y recalculan en minor units desde snapshots; edición concurrente de misma línea, disputa de mesa, cancelación post-envío y cobro excedente/clave distinta devuelven conflict o manual_review (nunca LWW)",
+                "transiciones monotónicas de OrderItem/KdsTicket aceptan o deduplican sin retroceder estado; tombstones bloquean resurrección ante updates obsoletos; occurredAt nunca decide prioridad ni orden",
+                "pnpm --filter @super-restaurant/domain lint && pnpm --filter @super-restaurant/domain typecheck && pnpm --filter @super-restaurant/domain test && pnpm --filter @super-restaurant/domain build en verde"
+            ],
+            "etaMin": 210,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 36,
+            "parent": "TODO-P3",
+            "note": "Paso 2 de la cadena codex. Dominio puro de dinero y estados críticos (nivel A); nunca importa NestJS, React, SQL ni red."
+        },
+        {
+            "id": "m2-sync-sql-migrations",
+            "title": "Migración SQL de ledger de deduplicación, dispositivos, changelog por cursor y manual_review",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "supabase/migrations/",
+                "supabase/tests/sync_ledger_invariants.sql",
+                "apps/api/src/operations/sync-schema-verification.ts",
+                "apps/api/src/operations/run-sync-schema-verification.ts",
+                "apps/api/package.json"
+            ],
+            "deps": [
+                "m2-sync-merge-domain"
+            ],
+            "acceptance": [
+                "migración nueva versionada (timestamp asignado en el brief) crea tablas en app con RLS+FORCE y cero grants directos: sync_devices, sync_event_ledger (dedup por scope+eventId y scope+idempotencyKey con huella y retención protegida para eventos financieros), sync_changelog (secuencia canónica monotónica + tombstones) y sync_manual_review_cases",
+                "funciones SECURITY DEFINER en app_private con search_path fijo y EXECUTE únicamente para app_api validan restaurante/sucursal, monotonicidad de local_sequence por device_id, reutilización incompatible de idempotencyKey y aislamiento estricto entre tenants",
+                "supabase/tests/sync_ledger_invariants.sql y pnpm --filter @super-restaurant/api run verify:sync-schema:rollback pasan en PostgreSQL 17 local desde cero",
+                "pnpm lint && pnpm typecheck && pnpm test en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": "superrestaurant-40",
+            "pr": 39,
+            "parent": "m1-coverage-inventory",
+            "note": "Paso 3 de la cadena codex. Carril exclusivo de supabase/migrations/; no editar ninguna migración ya aplicada. No aplicar en remoto sin lote autorizado. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-api-sync-push-merge",
+            "title": "Endpoint POST /sync por lotes con revalidación server-side, deduplicación y merge determinista",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "apps/api/src/sync/sync-push.service.ts",
+                "apps/api/src/sync/sync-merge-executor.ts",
+                "apps/api/src/sync/sync.controller.ts",
+                "apps/api/src/sync/sync-push.test.ts",
+                "apps/api/src/auth/rbac-policy.ts",
+                "apps/api/src/auth/rbac-policy.test.ts",
+                "apps/api/src/app.module.ts",
+                "apps/api/package.json"
+            ],
+            "deps": [
+                "m2-sync-sql-migrations"
+            ],
+            "acceptance": [
+                "POST /sync procesa lotes acotados a un solo scope con transacción independiente por evento y devuelve SyncEventResult para cada eventId (accepted|duplicate|rejected|conflict|manual_review) sin ocultar errores parciales",
+                "antes de deduplicar o aplicar cada evento revalida token, deviceId activo, membresía, branchId->restaurantId y permiso RBAC; actor o dispositivo revocado devuelve AUTH_REVOKED/DEVICE_REVOKED y mueve financieros pendientes a manual_review",
+                "despacha mutaciones sobre las autoridades existentes (orders, payments, cash-register, dining-tables, kds) usando sync-merge de packages/domain; recalcula dinero en servidor sin float y nunca permite LWW ni doble cobro",
+                "logs estructurados incluyen correlationId, restaurantId, branchId, deviceId y eventId sin PAN, CVV, tokens ni payloads sensibles",
+                "pnpm lint && pnpm typecheck && pnpm test && pnpm build en verde"
+            ],
+            "etaMin": 270,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 60,
+            "parent": "TODO-P3",
+            "note": "Paso 4 de la cadena codex. Nivel A crítico: toca autorización RBAC, dinero y escritura transaccional por evento. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-api-sync-pull-review",
+            "title": "Endpoints POST /sync/pull por cursor opaco, registro de dispositivos y resolución manual_review",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "apps/api/src/sync/sync-pull.service.ts",
+                "apps/api/src/sync/sync-cursor.ts",
+                "apps/api/src/sync/sync-manual-review.service.ts",
+                "apps/api/src/sync/sync-review.controller.ts",
+                "apps/api/src/sync/sync-pull.test.ts",
+                "apps/api/src/sync/sync-manual-review.test.ts",
+                "apps/api/src/app.module.ts",
+                "apps/api/package.json"
+            ],
+            "deps": [
+                "m2-api-sync-push-merge"
+            ],
+            "acceptance": [
+                "POST /sync/pull devuelve cambios canónicos y tombstones en orden de servidor con cursor opaco versionado ligado a restaurantId, branchId y principal; cursor de otro scope o expirado devuelve CURSOR_SCOPE_MISMATCH/CURSOR_EXPIRED sin fuga de datos",
+                "expone registro/verificación de dispositivo autorizado y GET/POST /sync/manual-review restringido a roles supervisores (sync.manual_review.resolve) con resolución compensatoria auditada y motivo obligatorio",
+                "pruebas unitarias y de contrato cubren paginación, resync, tombstones, aislamiento cross-tenant/cross-branch y revocación",
+                "pnpm lint && pnpm typecheck && pnpm test && pnpm build en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 65,
+            "parent": "m1-coverage-inventory",
+            "note": "Paso 5 de la cadena codex. Completa el backend de sincronización y desbloquea pruebas de conflicto multi-dispositivo y clientes. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-web-local-storage-crypto",
+            "title": "Almacenamiento local IndexedDB cifrado en reposo y transporte sync para apps/web",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "apps/web/src/lib/offline/",
+                "apps/web/package.json",
+                "pnpm-lock.yaml"
+            ],
+            "deps": [
+                "m2-adr-005-local-storage",
+                "m2-api-sync-pull-review"
+            ],
+            "acceptance": [
+                "implementa DurableSyncStoragePort sobre IndexedDB (según ADR-005) garantizando commit atómico de réplica + outbox + localSequence + pullCursor y detección explícita de falta de cuota o corrupción",
+                "cifra en reposo los registros sensibles de réplica/outbox con Web Crypto AES-GCM y clave no extraíble ligada a sesión/dispositivo; purga/bloquea al cerrar sesión o revocar sin perder evidencia requerida de manual_review",
+                "implementa SyncTransportPort HTTP hacia POST /sync y POST /sync/pull con manejo de errores retryable, sin almacenar secretos de servidor ni PAN/CVV",
+                "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 62,
+            "parent": "TODO-P3",
+            "note": "Paso 6 de la cadena codex. Clasificado nivel A porque implementa cifrado en reposo y ciclo de vida de claves para datos sensibles (AGENTS §13, OFFLINE_SYNC_CONTRACT §12) y actualiza pnpm-lock.yaml. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-mobile-local-storage-crypto",
+            "title": "Almacenamiento local cifrado en apps/mobile con expo-secure-store y transporte sync",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "codex",
+            "paths": [
+                "apps/mobile/src/offline/",
+                "apps/mobile/src/sign-out.ts",
+                "apps/mobile/package.json",
+                "pnpm-lock.yaml"
+            ],
+            "deps": [
+                "m2-adr-005-local-storage",
+                "m2-web-local-storage-crypto"
+            ],
+            "acceptance": [
+                "implementa DurableSyncStoragePort móvil (según ADR-005) con escritura atómica de réplica + outbox + localSequence + pullCursor y reutiliza el deviceId persistente de apps/mobile/src/expo-device-identity.ts",
+                "gestiona clave de cifrado en expo-secure-store y cifra en reposo datos sensibles locales; sign-out y revocación impiden nuevos pushes y purgan/bloquean datos sensibles de acuerdo con ADR-005",
+                "implementa SyncTransportPort HTTP autenticado hacia POST /sync y POST /sync/pull con pruebas unitarias de atomicidad, reinicio y revocación",
+                "pnpm --filter @super-restaurant/mobile lint && pnpm --filter @super-restaurant/mobile typecheck && pnpm --filter @super-restaurant/mobile test && pnpm --filter @super-restaurant/mobile build en verde"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 66,
+            "parent": "TODO-P3",
+            "note": "Paso 7 y último de la cadena codex. Nivel A por cifrado local con expo-secure-store, manejo de cierre de sesión y escritura exclusiva de pnpm-lock.yaml. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-web-pwa-shell",
+            "title": "Convertir apps/web en PWA instalable con manifest y Service Worker seguro",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "apps/web/public/sw.js",
+                "apps/web/public/icons/",
+                "apps/web/src/app/manifest.ts",
+                "apps/web/src/components/pwa-register.tsx",
+                "apps/web/src/app/layout.tsx",
+                "apps/web/next.config.ts"
+            ],
+            "deps": [
+                "m2-adr-005-local-storage"
+            ],
+            "acceptance": [
+                "apps/web expone manifest válido (/manifest.webmanifest), iconos instalables y Service Worker que cachea únicamente activos estáticos y el app shell, sin cachear respuestas API privadas/no-store ni mutaciones POST",
+                "aviso in-app accesible cuando existe una versión nueva del Service Worker o esquema actualizado, sin alert/confirm/prompt y con targets táctiles de al menos 44 px",
+                "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde",
+                "verificación en navegador real (escritorio y 390x844): manifest y SW activos, recarga del shell en modo offline sin overlay ni errores de consola"
+            ],
+            "etaMin": 150,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": "superrestaurant-37",
+            "pr": 34,
+            "parent": "TODO-P3",
+            "note": "Nivel C (UI/PWA). No toca apps/web/package.json ni src/app/app/ para correr en paralelo con la cadena codex sin solapamiento de rutas."
+        },
+        {
+            "id": "m2-kds-offline-cache",
+            "title": "Caché local IndexedDB en KDS, avance monotónico offline y recuperación por cursor",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "agy",
+            "paths": [
+                "apps/kds/src/",
+                "apps/kds/package.json",
+                "pnpm-lock.yaml"
+            ],
+            "deps": [
+                "m2-mobile-local-storage-crypto"
+            ],
+            "acceptance": [
+                "KDS persiste localmente en IndexedDB los tickets ya recibidos de su sucursal/estación y muestra la hora de última recepción cuando pierde WAN",
+                "permite avanzar localmente (preparing/ready) tickets ya recibidos de su estación encolando en DeviceSyncEngine con copy explícito de que otras estaciones lo verán al sincronizar; bloquea reasignación de estación/sucursal y no afirma recepción de órdenes nuevas sin WAN",
+                "al reconectar hace push de outbox y pull incremental por cursor para recuperar tickets perdidos tras caída de WebSocket sin duplicados ni fugas de estación",
+                "pnpm --filter @super-restaurant/kds lint && pnpm --filter @super-restaurant/kds typecheck && pnpm --filter @super-restaurant/kds test && pnpm --filter @super-restaurant/kds build en verde"
+            ],
+            "etaMin": 180,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 58,
+            "parent": "TODO-P3",
+            "note": "Nivel B porque los tickets KDS solo contienen datos de preparación de cocina (sin PII, dinero ni secretos de autenticación). Depende de m2-mobile-local-storage-crypto para serializar el acceso exclusivo a pnpm-lock.yaml. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-web-sync-status-ui",
+            "title": "Barra de estado de conectividad y vista /app/sync de pendientes, errores y manual_review en web",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "apps/web/src/components/sync-status-bar.tsx",
+                "apps/web/src/app/app/sync/",
+                "apps/web/src/app/app/layout.tsx",
+                "apps/web/src/app/app/app-nav.tsx",
+                "apps/web/src/lib/sync-ui.ts",
+                "apps/web/src/lib/sync-ui.test.ts",
+                "apps/web/package.json"
+            ],
+            "deps": [
+                "m2-web-local-storage-crypto"
+            ],
+            "acceptance": [
+                "el shell autenticado muestra estado real de conectividad (online|degraded|offline|reconnecting|sync_blocked), sucursal activa, contador de eventos pendientes y hora de último sync confirmado",
+                "la pantalla /app/sync lista cada evento con estado, reintentos, último error, acción segura de reintento/resync y flujo de revisión manual para supervisores usando los textos en español de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §2.3 (sin jerga técnica ni UUIDs expuestos al operador)",
+                "targets táctiles >= 44 px, foco visible, respeto a reduced-motion, cero alert/confirm/prompt y unitarias para helpers puros en sync-ui.test.ts",
+                "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde, con capturas en escritorio y 390x844 con consola limpia"
+            ],
+            "etaMin": 180,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 54,
+            "parent": "TODO-P3",
+            "note": "Nivel C (UI de pendientes). Solo consume API y almacenamiento local vía lib/offline; no calcula dinero ni decide permisos. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-web-offline-pos-cash",
+            "title": "Operación offline en Web POS (catálogo/mesas cacheados, orden local, efectivo y ticket pendiente)",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "apps/web/src/lib/offline-pos.ts",
+                "apps/web/src/lib/offline-pos.test.ts",
+                "apps/web/src/lib/print-documents.ts",
+                "apps/web/src/lib/print-documents.test.ts",
+                "apps/web/src/app/app/capture/",
+                "apps/web/src/app/app/caja/",
+                "apps/web/src/app/app/orders/",
+                "apps/web/package.json"
+            ],
+            "deps": [
+                "m2-web-sync-status-ui"
+            ],
+            "acceptance": [
+                "sin WAN permite consultar menú/mesas cacheados (mostrando versión/fecha), crear órdenes locales, agregar líneas a órdenes originadas en este dispositivo, registrar efectivo offline con precondiciones de caja/cajero/secuencia e imprimir ticket marcado explícitamente como 'Pendiente de sincronizar (solo este dispositivo)'",
+                "bloquea explícitamente con explicación en español las operaciones prohibidas offline (editar órdenes de otro dispositivo, descuentos/cancelaciones que exigen supervisor, cierre de caja, reembolsos y CFDI) sin encolarlas",
+                "las operaciones confirmadas localmente solo se anuncian como local_pending tras el commit atómico en DeviceSyncEngine; nunca afirma entrega a cocina ni a otros equipos sin WAN",
+                "pnpm --filter @super-restaurant/web lint && pnpm --filter @super-restaurant/web typecheck && pnpm --filter @super-restaurant/web test && pnpm --filter @super-restaurant/web build en verde, con capturas en escritorio y 390x844 con consola limpia"
+            ],
+            "etaMin": 240,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 59,
+            "parent": "TODO-P3",
+            "note": "Nivel C. Serializado tras m2-web-sync-status-ui para evitar conflicto en apps/web/package.json y reutilizar el proveedor de estado de sincronización. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-mobile-offline-sync-ui",
+            "title": "Integración offline y UI de conectividad/pendientes en apps/mobile",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "C",
+            "lane": "agy",
+            "paths": [
+                "apps/mobile/src/ui/sync-banner.tsx",
+                "apps/mobile/src/ui/pending-sync-screen.tsx",
+                "apps/mobile/src/ui/app.tsx",
+                "apps/mobile/src/ui/order-draft-screen.tsx",
+                "apps/mobile/src/mobile-state.ts",
+                "apps/mobile/src/mobile-state.test.ts",
+                "apps/mobile/src/order-submission.ts",
+                "apps/mobile/src/order-submission.test.ts",
+                "apps/mobile/package.json"
+            ],
+            "deps": [
+                "m2-mobile-local-storage-crypto"
+            ],
+            "acceptance": [
+                "apps/mobile conecta DeviceSyncEngine para consultar menú/mesas cacheados, encolar órdenes locales y cobros en efectivo permitidos por matriz, y bloquear acciones restringidas con explicación clara",
+                "muestra banner persistente de conectividad/sucursal/pendientes/último sync y pantalla de cola con detalle de errores, reintentos y conflictos sin alert/confirm/prompt y con targets táctiles >= 44 px",
+                "pnpm --filter @super-restaurant/mobile lint && pnpm --filter @super-restaurant/mobile typecheck && pnpm --filter @super-restaurant/mobile test && pnpm --filter @super-restaurant/mobile build en verde",
+                "verificación visual en viewport 390x844 (Expo web o emulador objetivo; si solo se verifica en Expo web, documentar limitación de dispositivo nativo)"
+            ],
+            "etaMin": 210,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 63,
+            "parent": "TODO-P3",
+            "note": "Nivel C (UI móvil). Corre en paralelo con m2-kds-offline-cache y m2-web-offline-pos-cash sin compartir rutas. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-test-sync-engine-failures",
+            "title": "Pruebas mecánicas de failure injection del motor en packages/sync-engine",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "packages/sync-engine/src/failure-injection.test.ts",
+                "packages/sync-engine/package.json"
+            ],
+            "deps": [
+                "m2-sync-contracts-engine"
+            ],
+            "acceptance": [
+                "cubre los escenarios de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §5 aplicables al motor: caída antes/después del commit atómico, timeout post-commit con recuperación duplicate, push accepted + pull fallido preservando pullCursor, lotes fuera de orden, 20 reenvíos concurrentes, reloj manipulado, schemaVersion atrasado, cola grande con backoff y rechazo estricto de PAN/CVV/secretos",
+                "valida que operaciones no habilitadas por matriz se bloquean antes de encolar y que eventos financieros pendientes nunca se purgan en compactación",
+                "pnpm --filter @super-restaurant/sync-engine lint && pnpm --filter @super-restaurant/sync-engine typecheck && pnpm --filter @super-restaurant/sync-engine test en verde"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 35,
+            "parent": "m1-coverage-inventory",
+            "note": "Tests mecánicos en carril opencode. Se desbloquea en la ola 2 inmediatamente después de m2-sync-contracts-engine."
+        },
+        {
+            "id": "m2-test-sync-merge-matrix",
+            "title": "Pruebas exhaustivas de matriz de conflictos y merge determinista en packages/domain",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "packages/domain/src/sync-merge-matrix.test.ts",
+                "packages/domain/package.json"
+            ],
+            "deps": [
+                "m2-sync-merge-domain"
+            ],
+            "acceptance": [
+                "ejercita las 15 filas aplicables de OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX §4.2: líneas aditivas en orden abierta, edición concurrente de cantidad/precio/descuento, cancelación vs preparación, KDS doble estación, disputa de mesa, cobro efectivo con misma y distinta idempotencyKey, card_manual, tombstones y orden independiente de occurredAt",
+                "verifica invariantes monetarios sin float (minor units exactos) y cero fusiones LWW en casos financieros o críticos",
+                "pnpm --filter @super-restaurant/domain lint && pnpm --filter @super-restaurant/domain typecheck && pnpm --filter @super-restaurant/domain test en verde"
+            ],
+            "etaMin": 120,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 37,
+            "parent": "m1-coverage-inventory",
+            "note": "Tests mecánicos en carril opencode. Corre en paralelo con m2-sync-sql-migrations tras fusionar m2-sync-merge-domain."
+        },
+        {
+            "id": "m2-api-sync-conflicts-tests",
+            "title": "Pruebas de integración HTTP + PostgreSQL 17 de conflictos con dos dispositivos, revocación y aislamiento",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "apps/api/src/operations/http-flow-sync-conflicts.ts",
+                "apps/api/src/sync/sync-conflicts.local.test.ts",
+                "apps/api/package.json"
+            ],
+            "deps": [
+                "m2-api-sync-pull-review"
+            ],
+            "acceptance": [
+                "simula dos dispositivos offline contra PostgreSQL 17 desechable en dos restaurantes y dos sucursales: dos dispositivos agregan líneas distintas a una mesa/orden (combinan con total server-side), edición concurrente de misma línea/mesa (conflict/manual_review), cancelación vs KDS preparando (sin retroceso KDS), cobro repetido con misma clave (duplicate, 1 pago) y con clave distinta excedente (manual_review sin doble cobro)",
+                "verifica rechazo de actor y dispositivo revocados, 20 reenvíos concurrentes produciendo un solo efecto, aislamiento total cross-restaurant y cross-branch en push/pull/cursor/dedup/tombstone, y no-visibilidad entre dispositivos antes de sincronizar (no-garantía LAN)",
+                "pnpm --filter @super-restaurant/api test && pnpm --filter @super-restaurant/api run test:sync-conflicts:local en verde en local y pg-verify"
+            ],
+            "etaMin": 180,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 53,
+            "parent": "TODO-P3",
+            "note": "Pruebas de integración en carril opencode. Valida los criterios de salida de conflictos multi-dispositivo de plan-autonomo-100.md §1 M2 y TODO Fase 3. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-e2e-offline-web",
+            "title": "Suite Playwright e2e:offline real (PWA, recarga sin pérdida, reconexión y conflicto 2 dispositivos)",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "opencode",
+            "paths": [
+                "apps/web/e2e/offline.spec.ts",
+                "apps/web/e2e/offline-conflicts.spec.ts",
+                "apps/web/e2e/fixtures/offline-helpers.ts",
+                "apps/web/playwright.config.ts",
+                "apps/web/playwright.ci.config.ts"
+            ],
+            "deps": [
+                "m2-web-pwa-shell",
+                "m2-web-sync-status-ui",
+                "m2-web-offline-pos-cash"
+            ],
+            "acceptance": [
+                "actualiza apps/web/e2e/offline.spec.ts de modo informativo a aserciones reales de Fase 3: PWA carga offline, menú/mesas cacheados legibles, alta de orden + efectivo offline + ticket pendiente sobreviven recarga completa sin red, acciones prohibidas se bloquean con mensaje claro y al reconectar sincronizan sin duplicar",
+                "apps/web/e2e/offline-conflicts.spec.ts ejecuta dos contextos de navegador aislados offline sobre la misma mesa/orden y verifica la detección visible de conflicto y el flujo de manual_review en /app/sync sin alert/confirm/prompt ni pageerror",
+                "datos semilla deterministas con runId y cleanup obligatorio; cero overlays de Next ni errores de consola",
+                "pnpm --filter @super-restaurant/web e2e:typecheck && pnpm --filter @super-restaurant/web e2e:offline en verde contra API y web locales"
+            ],
+            "etaMin": 210,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 59,
+            "parent": "m1-coverage-inventory",
+            "note": "Puerta E2E principal de M2 en carril opencode. Sustituye el spec informativo actual por la verificación offline real requerida por plan-autonomo-100.md §1 M2. Fusionado en main (verificado 2026-11-25)."
+        },
+        {
+            "id": "m2-docs-offline-matrix-signoff",
+            "title": "Consolidar matriz offline verificada por cliente/operación y runbook de verificación M2",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "D",
+            "lane": "agy",
+            "paths": [
+                "docs/architecture/OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md",
+                "docs/runbooks/offline-verification.md"
+            ],
+            "deps": [
+                "o0-web-leader",
+                "o0-web-purge",
+                "o0-mobile-banner-tests",
+                "o0-visual-assert",
+                "o0-sync-p3"
+            ],
+            "acceptance": [
+                "docs/architecture/OFFLINE_CAPABILITY_AND_CONFLICT_MATRIX.md actualiza el estado por cada cliente (Web POS, Mobile, KDS) y operación enlazando exactamente las pruebas automatizadas que lo demuestran y manteniendo explícita la exclusión de Fase 3B/LAN, tarjeta integrada, CFDI, reembolsos e inventario",
+                "docs/runbooks/offline-verification.md documenta comandos reproducibles (e2e:offline, test:sync-conflicts:local, verify:sync-schema:rollback), límites conocidos de plataforma/hardware y checklist de prueba humana de cierre de M2",
+                "solo documentación; git diff --check en verde"
+            ],
+            "etaMin": 90,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 79,
+            "parent": "M2",
+            "note": "Cierre formal en docs/agentic/m2-offline-signoff.md; migraciones remotas y verificacion en dispositivo quedan como puertas humanas."
+        },
+        {
+            "id": "o0-web-leader",
+            "title": "Eleccion de lider entre pestanas y protocolo STORAGE_COMMIT_FAILED probado en el motor",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/src/lib/offline/sync-leader.ts",
+                "apps/web/src/lib/offline/sync-leader.test.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "sync-leader.ts expone liderazgo exclusivo por deviceId via Web Locks + BroadcastChannel y libera al cerrar",
+                "prueba: segundo motor no escribe mientras el lider vive; al perder el lock el motor se descarta y recarga con la misma idempotency key",
+                "pnpm --filter @super-restaurant/web lint/typecheck en verde y la prueba nueva corre con salida real"
+            ],
+            "etaMin": 30,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 73,
+            "parent": null,
+            "note": "P2 de #62 (debt.md). No tocar apps/web/package.json (lo hace o0-wire)."
+        },
+        {
+            "id": "o0-web-purge",
+            "title": "Purga y rotacion del almacen cifrado web (sign-out, AUTH_REVOKED, keyVersion, AAD con scope)",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/src/lib/offline/sync-store.ts",
+                "apps/web/src/lib/offline/sync-purge.ts",
+                "apps/web/src/lib/offline/sync-purge.test.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "purga en sign-out limpio y bloqueo+purga de replica en AUTH_REVOKED conservando outbox con evidencia",
+                "keyVersion rotada y AAD incluye restaurantId/branchId como defensa en profundidad",
+                "pruebas nuevas cubren purga, bloqueo, rotacion y AAD incorrecta; salida real de test web"
+            ],
+            "etaMin": 30,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 74,
+            "parent": null,
+            "note": "P2 de #62. sync-store.ts es de este item en exclusiva."
+        },
+        {
+            "id": "o0-mobile-banner-tests",
+            "title": "Pruebas del banner mobile: carrera !alive y ruta resume/locked",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "dsh",
+            "paths": [
+                "apps/mobile/src/ui/sync-banner.test.tsx"
+            ],
+            "deps": [],
+            "acceptance": [
+                "prueba de la carrera !alive (snapshot que llega tras desmontar no actualiza estado)",
+                "prueba de ruta resume/locked con copy de operador sin rutas ni codigos internos",
+                "pnpm --filter @super-restaurant/mobile test:typecheck y la prueba nueva en verde con salida real"
+            ],
+            "etaMin": 20,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 75,
+            "parent": null,
+            "note": "P2 de #66 (debt.md). apps/mobile/package.json lo edita o0-wire."
+        },
+        {
+            "id": "o0-visual-assert",
+            "title": "Helper de aserciones visuales sin vision y spec offline KDS",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "C",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/src/lib/visual-assert.ts",
+                "apps/web/src/lib/visual-assert.test.ts",
+                "apps/web/e2e/visual/assert-ui.ts",
+                "apps/web/e2e/visual/offline-kds.spec.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "visual-assert.ts puro: umbral 44x44, sin desborde horizontal, foco visible, sin alert/confirm/prompt, cero errores de consola y red >=400",
+                "prueba unitaria de cada regla con salida real",
+                "spec @offline-visual en 1280x800 y 390x844 que se omite sin E2E_VISUAL=1 y guarda capturas en docs/agentic/visual-m2/"
+            ],
+            "etaMin": 25,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 76,
+            "parent": null,
+            "note": "§5.3 del plan. No corre en CI (playwright.ci.config.ts no lo incluye)."
+        },
+        {
+            "id": "o0-sync-p3",
+            "title": "P3 de sync: DEVICE_UNKNOWN, ACTOR_MISMATCH, log de rechazo y timeout de transporte web",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "dsh",
+            "paths": [
+                "apps/api/src/sync",
+                "apps/web/src/lib/offline/sync-transport.ts",
+                "apps/web/src/lib/offline/sync-transport.test.ts"
+            ],
+            "deps": [],
+            "acceptance": [
+                "el ejecutor distingue DEVICE_UNKNOWN de DEVICE_REVOKED y ACTOR_MISMATCH de AUTH_REVOKED",
+                "rechazo con log estructurado sin token ni PII",
+                "transporte web con timeout de 30 s por defecto y prueba que cubre el corte",
+                "pnpm --filter @super-restaurant/api test y la prueba de transporte en verde con salida real"
+            ],
+            "etaMin": 25,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": 77,
+            "parent": null,
+            "note": "P3 de #60/#65."
+        },
+        {
+            "id": "o0-wire",
+            "title": "Cableado de Ola 0: registrar pruebas nuevas en los scripts de test",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/package.json",
+                "apps/mobile/package.json"
+            ],
+            "deps": [
+                "o0-web-leader",
+                "o0-web-purge",
+                "o0-mobile-banner-tests",
+                "o0-visual-assert"
+            ],
+            "acceptance": [
+                "apps/web/package.json test ejecuta sync-leader, sync-purge y visual-assert con el patron tsc --ignoreConfig existente",
+                "apps/mobile/package.json test ejecuta sync-banner.test",
+                "pnpm --filter @super-restaurant/web test y --filter mobile test en verde con salida real"
+            ],
+            "etaMin": 10,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "Fusionado en #85: web registra sync-leader/sync-purge/visual-assert y mobile sync-banner-lifecycle. El cableado PRODUCTIVO del lider (offline-runtime-mount) sigue abierto como o0-leader-wire."
+        },
+        {
+            "id": "o0-rev-web-leader",
+            "title": "Revision dsh de o0-web-leader",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "docs/agentic/debt.md"
+            ],
+            "deps": [
+                "o0-web-leader"
+            ],
+            "acceptance": [
+                "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
+                "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
+                "sin tocar codigo de produccion"
+            ],
+            "etaMin": 10,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "dsh 2026-11-26: CAMBIOS. P2: seguidor sin timeout; lider sin consumidor productivo (bloquea o0-wire, nuevo o0-leader-wire); la prueba de pestana obsoleta es tautologica. P3: onLost en liberacion voluntaria, canal sin oyente."
+        },
+        {
+            "id": "o0-rev-web-purge",
+            "title": "Revision dsh de o0-web-purge",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "docs/agentic/debt.md"
+            ],
+            "deps": [
+                "o0-web-purge"
+            ],
+            "acceptance": [
+                "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
+                "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
+                "sin tocar codigo de produccion"
+            ],
+            "etaMin": 10,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "dsh 2026-11-26: CAMBIOS con dos P1: decideOfflinePurge sin llamador de produccion (AUTH_REVOKED solo marca sync_blocked) y purgeReplica rechaza con STORAGE_LOCKED, asi que bloquear+purgar es inalcanzable. P2: cursor del scope sin limpiar. Nuevo o0-purge-wire."
+        },
+        {
+            "id": "o0-rev-mobile-banner",
+            "title": "Revision dsh de o0-mobile-banner-tests",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "docs/agentic/debt.md"
+            ],
+            "deps": [
+                "o0-mobile-banner-tests"
+            ],
+            "acceptance": [
+                "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
+                "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
+                "sin tocar codigo de produccion"
+            ],
+            "etaMin": 10,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "dsh 2026-11-26: APROBAR. P2: carrera openRuntime->stop sin prueba (onDiscard es stub) y refresh/syncNow sin guard tras desmontar. P3 previo de linea inalcanzable refutado."
+        },
+        {
+            "id": "o0-rev-visual",
+            "title": "Revision dsh de o0-visual-assert",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "docs/agentic/debt.md"
+            ],
+            "deps": [
+                "o0-visual-assert"
+            ],
+            "acceptance": [
+                "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
+                "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
+                "sin tocar codigo de produccion"
+            ],
+            "etaMin": 10,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "dsh 2026-11-26 (2a ronda): CAMBIOS. P2: offline-kds.spec.ts sin expectFinalRoute/assertBranchState deja pasar una redireccion. P3: networkidle silenciado, 404/501 de /api/sync contados como fallo, accessibleName sin img alt, mkdirSync doble, focus-visible solo en el primer Tab, insets no-px y pseudo anclado a ancestro."
+        },
+        {
+            "id": "o0-rev-sync-p3",
+            "title": "Revision dsh de o0-sync-p3",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "docs/agentic/debt.md"
+            ],
+            "deps": [
+                "o0-sync-p3"
+            ],
+            "acceptance": [
+                "veredicto explicito APROBAR o CAMBIOS con hallazgos P1/P2/P3",
+                "foco 1 (invariantes) o foco 2 (pruebas adversariales con salida real) segun el brief",
+                "sin tocar codigo de produccion"
+            ],
+            "etaMin": 10,
+            "attempts": 0,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "dsh 2026-11-26: APROBAR. P2: ACTOR_MISMATCH/DEVICE_UNKNOWN siguen emitiendose como AUTH_REVOKED/DEVICE_REVOKED y mandan financieros a revision manual. P3: UUID-only vs ULID, correlationId por evento, rejectEvent sin log, timeout de 30 s tambien para snapshots."
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 87,
+            "parent": null,
+            "note": "",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-dom-units",
+                "m3-dom-ledger",
+                "m3-dom-costing",
+                "m3-dom-recipe"
+            ],
+            "status": "done",
+            "id": "m3-dom-wire",
+            "title": "Exportar modulos de inventario e registrar suites de dominio",
+            "level": "B",
+            "paths": [
+                "packages/domain/src/index.ts",
+                "packages/domain/package.json"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 86,
+            "parent": null,
+            "note": "",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-sql-catalog"
+            ],
+            "status": "done",
+            "id": "m3-sql-ledger",
+            "title": "Ledger inmutable con saldo derivado y funcion idempotente",
+            "level": "A",
+            "paths": [
+                "supabase/migrations/20261126000200_inventory_ledger.sql",
+                "supabase/tests/inventory_ledger_invariants.sql"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 89,
+            "parent": null,
+            "note": "",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-sql-ledger"
+            ],
+            "status": "done",
+            "id": "m3-sql-recipes",
+            "title": "Recetas versionadas con snapshot",
+            "level": "A",
+            "paths": [
+                "supabase/migrations/20261126000300_inventory_recipes.sql",
+                "supabase/tests/inventory_recipes_invariants.sql"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 91,
+            "parent": null,
+            "note": "PR #91 fusionado: idempotencia por sucursal+clave, auditoria de recepcion y pruebas de dinero; revision doble dsh.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-sql-recipes"
+            ],
+            "status": "done",
+            "id": "m3-sql-purchasing",
+            "title": "Proveedores, ordenes de compra y recepcion",
+            "level": "A",
+            "paths": [
+                "supabase/migrations/20261126000400_inventory_purchasing.sql"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "Migracion 00500 + 00700 y cableado API en la rama m3-sql-sale-consumption: is_default por sucursal, eventos comando+pasos, reverso compensado, cancelacion de linea. Verificador 84 migraciones verde y test:http:local 7/7. Falta el E2E applied del wrapper de confirmacion (m3-int-sale-to-stock).",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-sql-purchasing",
+                "m3-map-sale-hooks"
+            ],
+            "status": "done",
+            "id": "m3-sql-sale-consumption",
+            "title": "Consumo por venta y reverso idempotentes",
+            "level": "A",
+            "paths": [
+                "supabase/migrations/20261126000500_inventory_sale_consumption.sql"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 88,
+            "parent": null,
+            "note": "",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-dom-wire"
+            ],
+            "status": "done",
+            "id": "m3-contracts",
+            "title": "DTOs y parsers de inventario en shared-types",
+            "level": "A",
+            "paths": [
+                "packages/shared-types/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 90,
+            "parent": null,
+            "note": "PR #90 fusionado: 8 funciones app_private SECURITY DEFINER, mapeo de errores 23503/23514/42501; revision doble dsh.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-contracts"
+            ],
+            "status": "done",
+            "id": "m3-api-items",
+            "title": "API de insumos y almacenes",
+            "level": "B",
+            "paths": [
+                "apps/api/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "PR #99 fusionado: transferencia atomica con lock, ajuste/merma/conteo, listados de movimientos/saldos; revision A con P2 corregidos.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-contracts"
+            ],
+            "status": "done",
+            "id": "m3-api-movements",
+            "title": "API de movimientos manuales con supervisor y motivo",
+            "level": "A",
+            "paths": [
+                "apps/api/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "PR #100: publicar/listar/leer recetas versionadas; P2 de doble transaccion corregido devolviendo la version publicada.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-contracts"
+            ],
+            "status": "done",
+            "id": "m3-api-recipes",
+            "title": "API de recetas",
+            "level": "B",
+            "paths": [
+                "apps/api/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-contracts"
+            ],
+            "status": "done",
+            "id": "m3-api-purchasing",
+            "title": "API de compras y recepcion",
+            "level": "A",
+            "paths": [
+                "apps/api/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "PR #106: alertas por minimo, costo medio entero con resto, coste de receta y margen estimado; PG 88 migraciones y revision B APROBAR.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-contracts"
+            ],
+            "status": "done",
+            "id": "m3-api-alerts-costing",
+            "title": "API de alertas, costo promedio y margen",
+            "level": "B",
+            "paths": [
+                "apps/api/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "PR #99 Insumos/Almacenes, #108 Movimientos, #109 Recetas, #113 Compras, #114 Alertas/costos y #125 Almacén predeterminado (isDefault). Pase visual real 12/12 (6 pestañas × 1366×800 y 390×844) en docs/agentic/visual-verify-2026-11-26/.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-api-wire"
+            ],
+            "status": "done",
+            "id": "m3-web-inventario",
+            "title": "UI web de inventario (insumos, movimientos, conteo, recetas, compras, alertas)",
+            "level": "C",
+            "paths": [
+                "apps/web/src/app/app/inventario"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "PR #104: flujo http_flow_inventory (8/8) con almacen default, receta, consumo 240 g, replay sin duplicar, reverso y linea sin receta inerte; revision A APROBAR.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-sql-sale-consumption"
+            ],
+            "status": "done",
+            "id": "m3-int-sale-to-stock",
+            "title": "Integracion venta-cancelacion contra existencias",
+            "level": "A",
+            "paths": [
+                "apps/api/src/inventory"
+            ]
+        },
+        {
+            "attempts": 0,
+            "sessionId": null,
+            "pr": 123,
+            "parent": null,
+            "note": "PR #123: journey-13-inventario.spec.ts verde en 1.7 min contra el stack local. Siembra con runId, asegura el almacén predeterminado (isDefault), restaura la receta previa y arma el plan con los helpers de captura (mitades). Verificado: la venta consume 120 g, alerta con déficit, margen, ajuste y cancelación con sale_reversal.",
+            "milestone": "M3",
+            "phase": 4,
+            "lane": "dsh",
+            "deps": [
+                "m3-web-inventario"
+            ],
+            "status": "done",
+            "id": "m3-e2e-journey",
+            "title": "Journey E2E de inventario",
+            "level": "B",
+            "paths": [
+                "apps/web/e2e/journeys"
+            ]
+        },
+        {
+            "id": "o0-purge-wire",
+            "title": "Cablear la purga offline en produccion (AUTH_REVOKED -> lock + replica, outbox retenido)",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/src/lib/offline/sync-store.ts",
+                "apps/web/src/components/offline-runtime-mount.tsx",
+                "apps/web/src/lib/offline/web-sync-bridge.ts",
+                "apps/web/src/lib/offline/sync-purge.test.ts"
+            ],
+            "deps": [
+                "o0-rev-web-purge"
+            ],
+            "acceptance": [
+                "decideOfflinePurge se invoca con el evento real (sign_out, auth_revoked) y su accion se aplica",
+                "AUTH_REVOKED bloquea el almacen Y purga la replica conservando el outbox y su evidencia",
+                "purgeReplica deja de rechazar con STORAGE_LOCKED cuando la accion lo exige",
+                "pruebas end-to-end de sign_out y AUTH_REVOKED con salida real; cursor del scope limpiado"
+            ],
+            "etaMin": 35,
+            "attempts": 0,
+            "status": "todo",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "P1 de o0-rev-web-purge (2026-11-26). Bloquea declarar M2 al 100%."
+        },
+        {
+            "id": "o0-leader-wire",
+            "title": "Montar el lider de sync entre pestanas en el runtime web",
+            "milestone": "M2",
+            "phase": 3,
+            "level": "B",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/src/components/offline-runtime-mount.tsx",
+                "apps/web/src/lib/offline/sync-leader.ts",
+                "apps/web/src/lib/offline/sync-leader.test.ts"
+            ],
+            "deps": [
+                "o0-rev-web-leader"
+            ],
+            "acceptance": [
+                "offline-runtime-mount usa acquireSyncLeader: solo el lider abre el puente y sincroniza",
+                "el seguidor resuelve con timeout (no cuelga) y muestra por que no sincroniza",
+                "perder el lock descarta el motor y reintenta con la misma idempotency key; prueba real"
+            ],
+            "etaMin": 30,
+            "attempts": 0,
+            "status": "todo",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "P2 de o0-rev-web-leader (2026-11-26). Sin esto, varias pestanas escriben el mismo almacen."
+        },
+        {
+            "id": "o0-device-registry",
+            "title": "Validar x-device-id y deviceId de recepcion contra app.sync_devices",
+            "milestone": "Ola 5",
+            "phase": 4,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "supabase/migrations",
+                "apps/api/src/inventory"
+            ],
+            "deps": [
+                "debt-device-id"
+            ],
+            "acceptance": [
+                "funcion app_private de solo lectura que diga si un deviceId pertenece al actor/sucursal",
+                "movimientos y recepcion rechazan un dispositivo ajeno con prueba de aislamiento",
+                "invariantes SQL y verificador de inventario en verde"
+            ],
+            "etaMin": 35,
+            "attempts": 0,
+            "status": "todo",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "P2 de debt.md (Ola 4): hoy deviceId es traza de auditoria; validarlo exige migracion (nivel A)."
+        },
+        {
+            "id": "debt-compras-reads",
+            "title": "Lecturas de compras con catalog.read (servicio y SQL)",
+            "milestone": "M3",
+            "phase": 4,
+            "level": "A",
+            "lane": "dsh",
+            "paths": [
+                "apps/api/src/inventory/purchasing.service.ts",
+                "supabase/migrations/20261126001400_inventory_purchasing_reads.sql"
+            ],
+            "deps": [],
+            "acceptance": [
+                "viewer/auditor/cashier/waiter/supervisor leen proveedores y ordenes; kitchen/courier reciben 42501",
+                "escrituras y read_inventory_supplier_for_manage siguen en catalog.manage",
+                "verify:inventory-schema:rollback 91 migraciones ok y test:http:local 9/9"
+            ],
+            "etaMin": 45,
+            "attempts": 1,
+            "status": "done",
+            "sessionId": null,
+            "pr": 131,
+            "parent": null,
+            "note": "Migracion 20261126001400 aplicada a dev el 2026-11-26 (dev-migrations-2026-11-26b.md). P3: comentarios manage-only y paridad RBAC pendientes."
+        },
+        {
+            "id": "debt-historical-verifiers",
+            "title": "Verificadores historicos de esquema desde cero",
+            "milestone": "M3",
+            "phase": 4,
+            "level": "B",
+            "lane": "dsh",
+            "paths": [
+                "apps/api/src/operations/run-capture-schema-verification.ts",
+                "supabase/tests/historical"
+            ],
+            "deps": [],
+            "acceptance": [
+                "verify:menu-shared-modifier-groups-schema:rollback, verify:menu-locked-ingredients-schema:rollback y verify:capture-schema:rollback pasan desde cero",
+                "los tres fixtures pineados viven en supabase/tests/historical y CI no los ejecuta contra el esquema completo"
+            ],
+            "etaMin": 60,
+            "attempts": 3,
+            "status": "done",
+            "sessionId": null,
+            "pr": 130,
+            "parent": null,
+            "note": "P2 de P2_MULTICHANNEL_CAPTURE_SLICE y M0-7 cerrados. P2/P3 de la revision: argumentos estrictos del runner y variable de adaptadores en local."
+        },
+        {
+            "id": "debt-device-id",
+            "title": "Identidad de dispositivo de inventario estable por perfil y decision frente al registro",
+            "milestone": "Ola 4",
+            "phase": 4,
+            "level": "B",
+            "lane": "dsh",
+            "paths": [
+                "apps/web/src/lib/inventory-ui.ts",
+                "apps/web/src/app/app/inventario/purchasing-panel.tsx",
+                "docs/agentic/device-identity-decision.md"
+            ],
+            "deps": [],
+            "acceptance": [
+                "deviceId de recepcion persistente por perfil (localStorage) con helper puro y pruebas",
+                "decision documentada: x-device-id es auditoria, no autorizacion",
+                "validacion contra app.sync_devices declarada como tarea con migracion (o0-device-registry)"
+            ],
+            "etaMin": 20,
+            "attempts": 2,
+            "status": "done",
+            "sessionId": null,
+            "pr": 134,
+            "parent": null,
+            "note": "dsh 2026-11-26. No hay prueba de rechazo de dispositivo ajeno porque no existe validacion contra el registro; queda como o0-device-registry."
+        },
+        {
+            "id": "debt-p3-sweep",
+            "title": "Barrido de debt.md: activa con dueno vs archivada con fecha",
+            "milestone": "Ola 4",
+            "phase": 4,
+            "level": "D",
+            "lane": "orquestador",
+            "paths": [
+                "docs/agentic/debt.md"
+            ],
+            "deps": [],
+            "acceptance": [
+                "cada P3 con dueno o archivado con fecha y motivo",
+                "sin entradas muertas"
+            ],
+            "etaMin": 20,
+            "attempts": 1,
+            "status": "done",
+            "sessionId": null,
+            "pr": null,
+            "parent": null,
+            "note": "2026-11-26: reescrito con secciones Activa/Archivada y motivos fechados."
+        }
+    ]
 }
