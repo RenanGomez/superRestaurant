@@ -40,7 +40,7 @@
     "provision:post-dining-zones-app-api:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-zones-app-api-provisioning.js",
     "provision:post-dining-tables-app-api:remote": "tsc --project tsconfig.build.json && node dist/operations/run-post-dining-tables-app-api-provisioning.js",
     "verify:schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-schema-verification.js",
-    "verify:capture-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-schema-verification.js",
+    "verify:capture-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-schema-verification.js --local-disposable-only",
     "verify:customer-address-validation-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-customer-address-validation-schema-verification.js",
     "verify:customer-search-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-customer-search-schema-verification.js",
     "verify:capture-customer-schema:rollback": "tsc --project tsconfig.build.json && node dist/operations/run-capture-customer-schema-verification.js",
