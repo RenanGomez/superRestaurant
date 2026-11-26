@@ -34,7 +34,7 @@ Nunca imprimas la cadena ni el certificado.
 
 ```powershell
 $env:SCHEMA_VERIFICATION_CONFIRMATION='READ_ONLY'
-$env:SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF='zwbyiefqeu jstyzysydn'   # sin el espacio
+$env:SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF='zwbyiefqeujstyzysydn'
 $env:SCHEMA_VERIFICATION_DATABASE_URL='<base>?sslmode=verify-full'
 $env:SCHEMA_VERIFICATION_CA_CERT_PATH='C:\Users\Emmanuel G\Documents\ChatGPT\superRestaurant\.certs\prod-ca-2021.crt'
 pnpm --filter @super-restaurant/api run preflight:migrations
