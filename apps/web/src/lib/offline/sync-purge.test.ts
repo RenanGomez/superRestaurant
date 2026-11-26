@@ -319,6 +319,86 @@ test("lock on an already quarantined store keeps both flags without corrupting t
   store.close();
 });
 
+test("purgeForScope with a pending outbox drops the A replica, keeps the A outbox and forces A to resync", async () => {
+  const { store } = await setup();
+  const idsA: ScopeIds = { restaurantId: restaurant, branchId: branch };
+  const itemA = outboxEntry(idsA, "00000000-0000-4000-8000-0000000000e1", "resync-a", 1);
+  const replicaA = replicaEntity(idsA, "00000000-0000-4000-8000-0000000000e2");
+  const state = { ...createEmptyState(device), lastLocalSequence: 1, scopes: [scopeState(idsA, "cursor-a")], outbox: [itemA], replica: [replicaA] };
+  await store.persist(state as unknown as DurableSyncState);
+  const outcome = await store.purgeForScope(scope);
+  assert.equal(outcome.wiped, false);
+  assert.equal(outcome.removedReplicaCount, 1);
+  assert.equal(outcome.retainedOutboxCount, 1);
+  assert.equal(outcome.retainedScopeCount, 1);
+  const loaded = await store.loadState(device) as DurableSyncState;
+  assert.equal(loaded.replica.some((entity) => entity.restaurantId === restaurant && entity.branchId === branch), false);
+  assert.deepEqual(loaded.outbox, [itemA]);
+  const scopeA = loaded.scopes.find((item) => item.restaurantId === restaurant && item.branchId === branch);
+  assert.equal(scopeA?.status, "resync_required");
+  assert.equal(scopeA?.pullCursor, null);
+  store.close();
+});
+
+test("purgeForScope leaves the B replica, cursor and readability untouched", async () => {
+  const { store } = await setup();
+  const idsA: ScopeIds = { restaurantId: restaurant, branchId: branch };
+  const idsB: ScopeIds = { restaurantId: restaurantB, branchId: branchB };
+  const itemA = outboxEntry(idsA, "00000000-0000-4000-8000-0000000000f1", "isolation-a2", 1);
+  const itemB = outboxEntry(idsB, "00000000-0000-4000-8000-0000000000f2", "isolation-b2", 2);
+  const replicaA = replicaEntity(idsA, "00000000-0000-4000-8000-0000000000f3");
+  const replicaB = replicaEntity(idsB, "00000000-0000-4000-8000-0000000000f4");
+  const state = { ...createEmptyState(device), lastLocalSequence: 2, scopes: [scopeState(idsA, "cursor-a"), scopeState(idsB, "cursor-b")], outbox: [itemA, itemB], replica: [replicaA, replicaB] };
+  await store.persist(state as unknown as DurableSyncState);
+  const outcome = await store.purgeForScope(scope);
+  assert.equal(outcome.wiped, false);
+  assert.equal(outcome.removedReplicaCount, 1);
+  assert.equal(outcome.retainedScopeCount, 2);
+  const loaded = await store.loadState(device) as DurableSyncState;
+  assert.deepEqual(loaded.replica, [replicaB]);
+  assert.deepEqual(loaded.outbox, [itemA, itemB]);
+  const scopeA = loaded.scopes.find((item) => item.restaurantId === restaurant && item.branchId === branch);
+  const scopeB = loaded.scopes.find((item) => item.restaurantId === restaurantB && item.branchId === branchB);
+  assert.deepEqual([scopeA?.status, scopeA?.pullCursor], ["resync_required", null]);
+  assert.deepEqual([scopeB?.status, scopeB?.pullCursor], ["active", "cursor-b"]);
+  store.close();
+});
+
+test("purgeForScope of an emptied A does not wipe a registered empty B scope or its cursor", async () => {
+  const { store } = await setup();
+  const idsA: ScopeIds = { restaurantId: restaurant, branchId: branch };
+  const idsB: ScopeIds = { restaurantId: restaurantB, branchId: branchB };
+  const replicaA = replicaEntity(idsA, "00000000-0000-4000-8000-0000000000f5");
+  const state = { ...createEmptyState(device), lastLocalSequence: 0, scopes: [scopeState(idsA, "cursor-a"), scopeState(idsB, "cursor-b")], outbox: [], replica: [replicaA] };
+  await store.persist(state as unknown as DurableSyncState);
+  const outcome = await store.purgeForScope(scope);
+  assert.equal(outcome.wiped, false);
+  assert.equal(outcome.removedReplicaCount, 1);
+  const loaded = await store.loadState(device) as DurableSyncState;
+  assert.notEqual(loaded, null);
+  const scopeB = loaded.scopes.find((item) => item.restaurantId === restaurantB && item.branchId === branchB);
+  assert.deepEqual([scopeB?.status, scopeB?.pullCursor], ["active", "cursor-b"]);
+  const scopeA = loaded.scopes.find((item) => item.restaurantId === restaurant && item.branchId === branch);
+  assert.deepEqual([scopeA?.status, scopeA?.pullCursor], ["resync_required", null]);
+  store.close();
+});
+
+test("purgeAll with financial evidence still degrades to keep-outbox", async () => {
+  const { store } = await setup();
+  const evidence = evidenceState();
+  await store.persist(evidence);
+  const outcome = await store.purgeAll();
+  assert.equal(decideOfflinePurge({ event: "sign_out", hasFinancialEvidence: true }).action, "purge_replica_keep_outbox");
+  assert.equal(outcome.wiped, false);
+  assert.equal(outcome.removedReplicaCount, 1);
+  assert.equal(outcome.retainedOutboxCount, 1);
+  assert.equal(outcome.retainedScopeCount, 1);
+  const loaded = await store.loadState(device) as DurableSyncState;
+  assert.equal(loaded.replica.length, 0);
+  assert.deepEqual(loaded.outbox, evidence.outbox);
+  store.close();
+});
+
 test("a degraded purge reencrypts and a later commit still loads", async () => {
   const { store } = await setup();
   const evidence = evidenceState();

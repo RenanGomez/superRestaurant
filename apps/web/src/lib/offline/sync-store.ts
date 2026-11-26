@@ -297,7 +297,10 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
     await done;
     this.generation = null;
   }
-  private purgeReplica(shouldRemove: (entity: ReplicaEntity) => boolean): Promise<WebSyncPurgeOutcome> {
+  private purgeReplica(
+    shouldRemove: (entity: ReplicaEntity) => boolean,
+    resetScope: ((scope: SyncScopeInput) => boolean) | null,
+  ): Promise<WebSyncPurgeOutcome> {
     return this.exclusive(async () => {
       try {
         const meta = await this.read<Meta>(META, this.deviceId);
@@ -307,21 +310,30 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
         const state = await this.decrypt(meta);
         const replica = state.replica.filter((entity) => !shouldRemove(entity));
         const removedReplicaCount = state.replica.length - replica.length;
-        const parsed = parseDurableState({ ...state, replica }, this.deviceId);
+        // Keep the purged scope registered so its retained outbox stays valid, but force it to
+        // resync: a surviving cursor would keep pulling a tenant the device already left.
+        const scopes = resetScope === null
+          ? state.scopes
+          : state.scopes.map((item) => resetScope(item) ? { ...item, status: "resync_required" as const, pullCursor: null } : item);
+        const parsed = parseDurableState({ ...state, replica, scopes }, this.deviceId);
         if (!parsed.ok) throw new WebSyncStorageError("STATE_CORRUPT");
-        // `purgeAll` removes every replica, so its wipe decision reduces to "no retained outbox".
-        // `purgeForScope` keeps other-scope replica and therefore never wipes them.
-        if (parsed.value.outbox.length === 0 && parsed.value.replica.length === 0) {
+        // Only wipe when nothing remains anywhere: a wipe also deletes other scopes' replica,
+        // cursors and registration. `purgeAll` covers every scope, so it may wipe on an empty store.
+        const cursorRetained = parsed.value.scopes.some((item) => item.pullCursor !== null);
+        if (parsed.value.outbox.length === 0 && parsed.value.replica.length === 0 && (resetScope === null || !cursorRetained)) {
           await this.wipeRows();
           return Object.freeze({ wiped: true, removedReplicaCount, retainedOutboxCount: 0, retainedScopeCount: 0 });
         }
+        const retainedScopes = new Set<string>();
+        for (const entity of parsed.value.replica) retainedScopes.add(`${entity.restaurantId}/${entity.branchId}`);
+        for (const entry of parsed.value.outbox) retainedScopes.add(`${entry.restaurantId}/${entry.branchId}`);
         const next = await this.reencrypt(parsed.value, meta);
         this.generation = next.generation;
         return Object.freeze({
           wiped: false,
           removedReplicaCount,
           retainedOutboxCount: parsed.value.outbox.length,
-          retainedScopeCount: parsed.value.scopes.length,
+          retainedScopeCount: retainedScopes.size,
         });
       } catch (error) { throw storageError(error); }
     });
@@ -329,7 +341,8 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
   public purgeForScope(scope: SyncScopeInput): Promise<WebSyncPurgeOutcome> {
     const restaurantId = normalizeId(scope.restaurantId);
     const branchId = normalizeId(scope.branchId);
-    return this.purgeReplica((entity) => normalizeId(entity.restaurantId) === restaurantId && normalizeId(entity.branchId) === branchId);
+    const sameScope = (item: SyncScopeInput) => normalizeId(item.restaurantId) === restaurantId && normalizeId(item.branchId) === branchId;
+    return this.purgeReplica((entity) => sameScope(entity), sameScope);
   }
   /**
    * Total purge. Wipes slots, keys and metadata when the outbox retains no evidence; otherwise
@@ -337,6 +350,6 @@ export class WebIndexedDbSyncStorage implements DurableSyncStoragePort {
    * re-encrypted under a fresh key. Retained financial evidence is never deleted.
    */
   public purgeAll(): Promise<WebSyncPurgeOutcome> {
-    return this.purgeReplica(() => true);
+    return this.purgeReplica(() => true, null);
   }
 }
