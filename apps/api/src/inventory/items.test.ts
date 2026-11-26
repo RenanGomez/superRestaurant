@@ -18,6 +18,7 @@ const branchId = "23723e10-c0bf-49fd-9363-4f0e2c60e955";
 const otherBranchId = "00000000-0000-4000-8000-000000000000";
 const itemId = "ee50f0f6-746f-47cb-8383-ad7834ef3ef0";
 const warehouseId = "a409ec59-9f5e-496d-a45d-b83a46b49674";
+const foreignWarehouseId = "0f2b8c47-3f5e-4a1d-9c86-2b7c4e0d5a91";
 const scope = { restaurantId, branchId } as unknown as BranchScope;
 
 const itemRow = Object.freeze({
@@ -368,6 +369,24 @@ test("updateWarehouse: rejects a non-boolean isDefault without updating", async 
   const handler: Handler = (sql) => (sql.includes("read_inventory_warehouse_for_manage") ? [warehouseRow] : []);
   const { service, database } = serviceFor({ handler });
   await assert.rejects(service.updateWarehouse(principal, warehouseId, { isDefault: "yes" }), code("request"));
+  assert.equal(database.queries.some((query) => query.sql.includes("update_inventory_warehouse")), false);
+});
+
+test("updateWarehouse: a warehouse from another restaurant/branch is missing and its update is never executed", async () => {
+  const handler: Handler = (sql, parameters) => {
+    if (sql.includes("read_inventory_warehouse_for_manage")) {
+      return parameters[1] === foreignWarehouseId ? [] : [warehouseRow];
+    }
+    if (sql.includes("update_inventory_warehouse")) return [warehouseRow];
+    return [];
+  };
+  const { service, database } = serviceFor({ handler });
+  await assert.rejects(
+    service.updateWarehouse(principal, foreignWarehouseId, { isDefault: true }),
+    code("missing"),
+  );
+  const read = database.queries.find((query) => query.sql.includes("read_inventory_warehouse_for_manage"));
+  assert.deepEqual(read?.parameters, [principal.actorId, foreignWarehouseId]);
   assert.equal(database.queries.some((query) => query.sql.includes("update_inventory_warehouse")), false);
 });
 

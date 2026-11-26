@@ -286,7 +286,11 @@ begin
     raise exception using errcode = '42501', message = 'INVENTORY_ACTOR_FORBIDDEN';
   end if;
 
-  if p_is_default and p_active then
+  if p_is_default and not p_active then
+    raise exception using errcode = '22000', message = 'INVENTORY_WAREHOUSE_DEFAULT_REQUIRES_ACTIVE';
+  end if;
+
+  if p_is_default then
     update app.inventory_warehouses as w
     set is_default = false,
         updated_at = pg_catalog.clock_timestamp()
@@ -356,6 +360,6 @@ grant execute on function app_private.update_inventory_warehouse(uuid, uuid, tex
 comment on function app_private.create_inventory_warehouse(uuid, uuid, uuid, text, boolean, boolean) is
   'Creates a branch warehouse; marking it default clears the previous branch default first and requires active.';
 comment on function app_private.update_inventory_warehouse(uuid, uuid, text, boolean, boolean) is
-  'Updates a branch warehouse; marking it default clears the previous branch default, and deactivating forces is_default false.';
+  'Updates a branch warehouse; marking it default clears the previous branch default, a default cannot be inactive (22000), and deactivating forces is_default false.';
 
 commit;
