@@ -1,13 +1,30 @@
 # Estado del loop
 
-Actualizado: 2026-11-26 (sesión solo-dsh: preflight, Ola 1 compras + contratos HTTP, Ola 2 alertas)
+Actualizado: 2026-11-26 (cierre de M3: pase visual real, journey E2E, almacén predeterminado y
+ledger crudo cerrado)
 
-- **M1/M2:** cerrados. M2 con puertas humanas en `docs/agentic/m2-offline-signoff.md` (migraciones remotas, dispositivo real, impresora, capturas).
-- **M3 inventario:** dominio (#80-#84, #87), contratos (#88), SQL de catálogo (#81), ledger (#86), recetas (#89), compras (#91), consumo por venta y reverso (#97), recetas API (#100), API de insumos/almacenes (#90, #98), movimientos/transferencias/saldos + pantalla `/app/inventario` (#99), API de compras (#102), alertas/costeo (#106), pestañas Movimientos (#108), Recetas (#109), **Compras (#113)** y **Alertas/costos (#114)**; **contratos HTTP de inventario (#112)**. 88 migraciones desde cero en verde con el verificador rollback-only.
-- **Porcentaje M3 (fusionado / total del hito):** ~97 %. API completa y probada por HTTP; UI con las seis pestañas. Faltan el pase visual real y el journey E2E.
-- **Preflight 2026-11-26 (READ_ONLY):** `main` en `0916ab8d`; `lastRemote=20261126001100`; **sin candidatas** (única diferencia `20260908000100`, excluida por objetos preexistentes). Catálogo 69 tablas / 15 políticas / 159 funciones. No se aplicó ni editó nada.
-- **Verificación de esta sesión:** `test:http:local` 10/10 con cleanup `stopped=true`; `verify:inventory-schema:rollback` 88 migraciones `ok`; web lint/typecheck/test (21/21)/build en 0; API typecheck/lint en 0.
-- **Bloqueo:** el pase visual real está bloqueado por la sesión E2E caducada (`Invalid Refresh Token`), no por el código. Necesita login manual (`pnpm --filter @super-restaurant/web e2e:auth`) o `e2e-import-session.bat` con Chrome cerrado.
-- **Decisiones nuevas:** (1) escrituras por funciones `app_private` SECURITY DEFINER, nunca grants directos a `app_api`; (2) consumo por venta con envoltorios `*_with_inventory` y almacén por defecto por sucursal; (3) `toWarehouseId` explícito en transferencias; (4) sin `imports` de módulos en `AppModule`; (5) el arnés HTTP de pruebas usa una transacción pg real.
-- **Migraciones remotas (dev):** APLICADAS las 21 pendientes hasta `20261126001100` con el protocolo 19.6; postcheck `upToDate=true`. Informe: `docs/agentic/dev-migrations-2026-11-25.md`.
-- **Retomada:** `HANDOFF.md` (entradas 2026-11-26) y `docs/plans/plan-dsh-cierre-m3-2026-11-25.md`.
+- **M1/M2:** cerrados. M2 con puertas humanas en `docs/agentic/m2-offline-signoff.md` (migraciones
+  remotas, dispositivo real, impresora, capturas).
+- **M3 inventario: ~100 %.** Dominio, contratos, SQL, API (insumos, almacenes, movimientos,
+  transferencias, saldos, recetas, compras, alertas/costeo), seis pestañas de `/app/inventario`,
+  **almacén predeterminado por sucursal (#125)**, **ledger crudo cerrado a `app_api` (#122)**,
+  **pase visual real 12/12 (#124)** y **journey E2E de inventario en verde (#123)**.
+- **Porcentaje M3 (fusionado / total del hito):** ~100 %. Queda deuda P3 documentada, no bloqueante.
+- **Puertas de esta ola:** `verify:inventory-schema:rollback` **90** migraciones desde cero `ok`;
+  `test:http:local` 9/9; shared-types 49/49; API y web typecheck/lint/test en 0;
+  `E2E_VISUAL=1` → **12/12** combinaciones con capturas en `docs/agentic/visual-verify-2026-11-26/`;
+  journey 13 **1 test verde (1.7 min)** contra el stack local.
+- **Migraciones remotas (dev):** aplicadas `20261126001200` y `20261126001300` con el protocolo
+  §19.6 (sonda rollback-only 7 y 27 sentencias, respaldo schema-only, dry-run exacto, postcheck con
+  `EXECUTE` correcto, segundo dry-run `upToDate`). `lastRemote=20261126001300`.
+  Informe: `docs/agentic/dev-migrations-2026-11-26.md`.
+- **Revisiones de la ola:** #122 APROBAR (SQL) + APROBAR (API tras el fix del P2); #124 APROBAR;
+  #125 APROBAR (SQL) + APROBAR (API/UI con dos P2 corregidos); #123 APROBAR tras corregir 2 P2 y 1 P3.
+- **Decisiones nuevas:** (1) el pase visual mide el hit area real de `::before/::after`; (2)
+  `isDefault` es obligatorio en el contrato del almacén (API y web se despliegan juntos); (3) los
+  worktrees de dsh viven en `.harness/worktrees` porque su sandbox no sale del repositorio; (4) el
+  `storageState` se renueva con `tools/agentic/local-servers/refresh-e2e-session.mjs`.
+- **Deuda:** `docs/agentic/debt.md` (P3 de auditor visual, UI de almacenes, `recipeVersionId` nulo en
+  movimientos, receta no despublicable y fixtura estable del journey).
+- **Siguiente ola:** `docs/plans/plan-2026-11-26-siguiente.md` §3 (deuda que muerde: verificadores
+  históricos, revisiones de M2, lecturas de compras con `catalog.read`, `deviceId`) y después M4.
