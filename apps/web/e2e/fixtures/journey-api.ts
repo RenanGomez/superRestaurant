@@ -21,6 +21,14 @@ export interface MenuProduct {
   readonly stationId: string;
   readonly variants?: readonly { readonly variantId: string; readonly name: string; readonly active: boolean; readonly unitPriceMinor: number }[];
   readonly modifierGroupIds?: readonly string[];
+  readonly pizzaMode?: string;
+  readonly baseGroupId?: string | null;
+  readonly baseGroupIds?: readonly string[];
+  readonly customizeAtOrder?: boolean;
+  readonly defaultIngredientOptionIds?: readonly string[];
+  readonly extraGroupIds?: readonly string[];
+  readonly extraOptionIds?: readonly string[];
+  readonly freeIngredientCount?: number;
 }
 
 export interface MenuCatalog {
@@ -122,6 +130,158 @@ export interface BranchCourier {
 
 export interface DeliveryListItem {
   readonly delivery: { readonly orderId: string; readonly state: string; readonly version: number };
+}
+
+export type InventoryUnit = "g" | "ml" | "piece";
+
+export interface InventoryItem {
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly sku: string | null;
+  readonly name: string;
+  readonly unitCode: InventoryUnit;
+  readonly purchaseUnitFactor: number;
+  readonly minQuantity: number;
+  readonly active: boolean;
+}
+
+export interface InventoryWarehouse {
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly name: string;
+  readonly active: boolean;
+}
+
+export interface InventoryBalance {
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly warehouseId: string;
+  readonly itemId: string;
+  readonly quantity: number;
+  readonly updatedAt: string;
+}
+
+export interface InventoryMovement {
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly warehouseId: string;
+  readonly itemId: string;
+  readonly kind: "receipt" | "sale_consumption" | "sale_reversal" | "waste" | "adjustment"
+    | "transfer_out" | "transfer_in" | "count_adjustment";
+  readonly quantityDelta: number;
+  readonly unitCode: InventoryUnit;
+  readonly occurredAt: string;
+  readonly actorId: string;
+  readonly reason: string | null;
+  readonly idempotencyKey: string;
+  readonly compensatesMovementId: string | null;
+  readonly transferPairId: string | null;
+  readonly unitCostMinor: number | null;
+  readonly currency: string | null;
+  readonly recipeVersionId: string | null;
+  readonly roundingRemainder: number;
+}
+
+export interface InventoryStockAlert {
+  readonly itemId: string;
+  readonly itemName: string;
+  readonly unitCode: InventoryUnit;
+  readonly warehouseId: string;
+  readonly warehouseName: string;
+  readonly quantity: number;
+  readonly minQuantity: number;
+  readonly deficit: number;
+}
+
+export interface InventoryProductMargin {
+  readonly schemaVersion: 1;
+  readonly restaurantId: string;
+  readonly branchId: string;
+  readonly productId: string;
+  readonly priceMinor: number;
+  readonly costMinor: number;
+  readonly marginMinor: number;
+  readonly currency: string;
+}
+
+export interface InventorySupplier {
+  readonly id: string;
+  readonly restaurantId: string;
+  readonly name: string;
+  readonly contact: string | null;
+  readonly active: boolean;
+  readonly createdAt: string;
+}
+
+export interface InventoryPurchaseOrderCreated {
+  readonly orderId: string;
+  readonly status: "draft" | "sent" | "received" | "cancelled";
+  readonly replayed: boolean;
+}
+
+export interface InventoryPurchaseReceipt {
+  readonly status: "received";
+  readonly movements: readonly { readonly lineId: string; readonly movementId: string }[];
+}
+
+export interface InventoryRecipeLine {
+  readonly itemId: string;
+  readonly quantity: number;
+  readonly unitCode: InventoryUnit;
+}
+
+export interface InventoryRecipeVersion {
+  readonly restaurantId: string;
+  readonly recipeId: string;
+  readonly productId: string;
+  readonly version: number;
+  readonly lines: readonly InventoryRecipeLine[];
+}
+
+export interface CreateInventoryItemInput {
+  readonly name: string;
+  readonly unitCode: InventoryUnit;
+  readonly sku?: string | null;
+  readonly purchaseUnitFactor?: number;
+  readonly minQuantity?: number;
+  readonly active?: boolean;
+}
+
+export interface InventoryModifierGroup {
+  readonly groupId: string;
+  readonly selections: readonly { readonly optionId: string; readonly quantity: number }[];
+}
+
+export interface InventoryPizzaHalf {
+  readonly fraction: "half-a" | "half-b";
+  readonly productId: string;
+  readonly variantId: string | null;
+  readonly ingredientOptionIds: readonly string[];
+  readonly extraOptionIds: readonly string[];
+  readonly removedIngredientOptionIds: readonly string[];
+}
+
+export interface InventoryPizzaLine {
+  readonly ruleVersion: "pizza-halves-v2";
+  readonly halves: readonly [InventoryPizzaHalf, InventoryPizzaHalf];
+}
+
+export interface CounterSaleInput {
+  readonly catalogVersion: string;
+  readonly currency: string;
+  readonly modifierGroups: readonly InventoryModifierGroup[];
+  readonly orderId: string;
+  readonly pizza?: InventoryPizzaLine | null;
+  readonly productId: string;
+  readonly shiftId: string;
+  readonly variantId: string | null;
+}
+
+export interface CounterSaleResult {
+  readonly inventory: { readonly status?: string; readonly reason?: string } | undefined;
+  readonly orderId: string;
 }
 
 interface JsonObject {
@@ -353,7 +513,145 @@ export class JourneyApi {
     });
   }
 
-  private async request<T = JsonObject>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  /** Inserts a run-scoped item; the ledger is immutable and the API has no delete. */
+  public createInventoryItem(input: CreateInventoryItemInput): Promise<InventoryItem> {
+    return this.request("POST", "/inventory/items", { ...input, restaurantId: this.scope.restaurantId });
+  }
+
+  public updateInventoryItem(id: string, patch: { readonly active: boolean }): Promise<InventoryItem> {
+    return this.request("PATCH", `/inventory/items/${encodeURIComponent(id)}`, patch);
+  }
+
+  public listInventoryItems(): Promise<{ readonly items: readonly InventoryItem[] }> {
+    return this.request("GET", `/inventory/items?${new URLSearchParams({ restaurantId: this.scope.restaurantId })}`);
+  }
+
+  public listInventoryWarehouses(): Promise<{ readonly warehouses: readonly InventoryWarehouse[] }> {
+    return this.request("GET", `/inventory/warehouses?${new URLSearchParams({
+      branchId: this.scope.branchId, restaurantId: this.scope.restaurantId,
+    })}`);
+  }
+
+  public listInventorySuppliers(): Promise<{ readonly suppliers: readonly InventorySupplier[] }> {
+    return this.request("GET", `/inventory/suppliers?${new URLSearchParams({ restaurantId: this.scope.restaurantId })}`);
+  }
+
+  public createInventorySupplier(input: { readonly contact: string | null; readonly name: string }): Promise<InventorySupplier> {
+    return this.request("POST", "/inventory/suppliers", {
+      ...input, active: true, restaurantId: this.scope.restaurantId,
+    });
+  }
+
+  public updateInventorySupplier(id: string, patch: { readonly active: boolean }): Promise<InventorySupplier> {
+    return this.request("PATCH", `/inventory/suppliers/${encodeURIComponent(id)}`, patch);
+  }
+
+  /** Creates a purchase order; receiving it writes one receipt movement and the integer average cost. */
+  public createInventoryPurchaseOrder(input: {
+    readonly currency: string;
+    readonly idempotencyKey: string;
+    readonly lines: readonly { readonly itemId: string; readonly quantity: number; readonly unitCode: InventoryUnit; readonly unitCostMinor: number }[];
+    readonly supplierId: string;
+  }): Promise<InventoryPurchaseOrderCreated> {
+    return this.request("POST", "/inventory/purchase-orders", {
+      ...input, branchId: this.scope.branchId, restaurantId: this.scope.restaurantId,
+    });
+  }
+
+  public receiveInventoryPurchaseOrder(orderId: string, warehouseId: string): Promise<InventoryPurchaseReceipt> {
+    return this.request("POST", `/inventory/purchase-orders/${encodeURIComponent(orderId)}/receive`, {
+      deviceId: this.deviceId, warehouseId,
+    });
+  }
+
+  public publishInventoryRecipe(
+    productId: string,
+    lines: readonly InventoryRecipeLine[],
+  ): Promise<InventoryRecipeVersion> {
+    return this.request("POST", "/inventory/recipes", { lines, productId, restaurantId: this.scope.restaurantId });
+  }
+
+  public listInventoryBalances(): Promise<{ readonly balances: readonly InventoryBalance[] }> {
+    return this.request("GET", `/inventory/balances?${new URLSearchParams({
+      branchId: this.scope.branchId, restaurantId: this.scope.restaurantId,
+    })}`);
+  }
+
+  public listInventoryMovements(
+    filter: { readonly itemId?: string; readonly warehouseId?: string } = {},
+  ): Promise<{ readonly movements: readonly InventoryMovement[] }> {
+    const query = new URLSearchParams({
+      branchId: this.scope.branchId, limit: "200", restaurantId: this.scope.restaurantId,
+    });
+    if (filter.itemId !== undefined) query.set("itemId", filter.itemId);
+    if (filter.warehouseId !== undefined) query.set("warehouseId", filter.warehouseId);
+    return this.request("GET", `/inventory/movements?${query}`);
+  }
+
+  public listInventoryAlerts(): Promise<{ readonly alerts: readonly InventoryStockAlert[] }> {
+    return this.request("GET", `/inventory/alerts?${new URLSearchParams({
+      branchId: this.scope.branchId, restaurantId: this.scope.restaurantId,
+    })}`);
+  }
+
+  public readInventoryMargin(productId: string): Promise<InventoryProductMargin> {
+    return this.request("GET", `/inventory/margins?${new URLSearchParams({
+      branchId: this.scope.branchId, productId, restaurantId: this.scope.restaurantId,
+    })}`);
+  }
+
+  /**
+   * Confirms a counter capture through the capture endpoints, the only path that runs sale-driven
+   * inventory consumption. The caller supplies `orderId` so cleanup can cancel the order even when
+   * the confirmation response is lost.
+   */
+  public async confirmCounterSale(input: CounterSaleInput): Promise<CounterSaleResult> {
+    const captureDraftId = randomUUID();
+    const created = await this.request<CaptureWorkspace>("POST", "/captures", {
+      ...this.audit(), schemaVersion: 1, scope: this.scope, captureDraftId, expectedVersion: 0,
+      sourceChannel: "counter", fulfillmentChannel: "counter",
+    });
+    const attentionLeaseId = created.detail.attentionLeaseId;
+    if (attentionLeaseId === null) throw new Error("La captura no expuso un lease de atención");
+    const pizza = input.pizza ?? undefined;
+    const planned = await this.request<CaptureWorkspace>("POST", "/captures/selection-plan", {
+      ...this.audit(), schemaVersion: 1, scope: this.scope, captureDraftId,
+      expectedVersion: created.detail.version, attentionLeaseId,
+      plan: {
+        schemaVersion: pizza === undefined ? 1 : 2, catalogVersion: input.catalogVersion,
+        lines: [{
+          lineId: randomUUID(), productId: input.productId, variantId: input.variantId,
+          quantity: 1, modifierGroups: input.modifierGroups, note: null,
+          ...(pizza === undefined ? {} : { pizza }),
+        }],
+      },
+    });
+    const confirmed = await this.request<{
+      readonly detail: { readonly confirmedOrderId?: string };
+      readonly inventory?: { readonly status?: string; readonly reason?: string };
+    }>("POST", "/captures/confirm", {
+      ...this.audit(), schemaVersion: 2, scope: this.scope, captureDraftId,
+      expectedVersion: planned.detail.version, attentionLeaseId, orderId: input.orderId,
+      shiftId: input.shiftId, tableId: null, currency: input.currency, timeZone: "America/Hermosillo",
+    });
+    if (confirmed.detail.confirmedOrderId !== input.orderId) {
+      throw new Error(`La confirmación no devolvió la orden ${input.orderId}`);
+    }
+    return { inventory: confirmed.inventory, orderId: input.orderId };
+  }
+
+  public cancelOrderItem(
+    orderId: string,
+    orderItemId: string,
+    expectedVersion: number,
+    reason: string,
+  ): Promise<{ readonly replayed: boolean }> {
+    return this.request("POST", "/orders/items/cancel", {
+      ...this.audit(), schemaVersion: 1, scope: this.scope, orderId, orderItemId, expectedVersion, reason,
+    });
+  }
+
+  private async request<T = JsonObject>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
     const init: RequestInit = {
       cache: "no-store",
       headers: {
