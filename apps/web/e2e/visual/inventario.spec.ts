@@ -5,7 +5,8 @@ import { ensureBranchSelected, expectAuthenticated } from "../helpers.ts";
 import { assertVisualUi, trackVisualUi } from "./assert-ui.ts";
 
 // Inventario completo: las seis pestanas en escritorio y en movil. Gated por E2E_VISUAL=1 porque
-// necesita el stack local levantado y la sesion guardada con `pnpm e2e:auth`.
+// necesita el stack local levantado y la sesion guardada con `pnpm e2e:auth`. La spec fija el
+// viewport de cada pasada, asi que se excluye del proyecto `mobile` con @desktop-only.
 test.skip(!process.env.E2E_VISUAL, "requiere E2E_VISUAL=1 y entorno local");
 
 const CAPTURE_DIR = "docs/agentic/visual-verify-2026-11-26";
@@ -26,7 +27,7 @@ for (const viewport of VIEWPORTS) {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
     for (const tab of INVENTORY_TABS) {
-      test(`@visual-inventario ${viewport.label} ${tab}`, async ({ page }) => {
+      test(`@visual-inventario @desktop-only ${viewport.label} ${tab}`, async ({ page }) => {
         trackVisualUi(page);
         const route = `/app/inventario?tab=${tab}`;
         await page.goto(route);

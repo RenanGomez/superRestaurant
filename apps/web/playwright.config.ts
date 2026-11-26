@@ -23,7 +23,7 @@ export default defineConfig({
   },
   projects: [
     { name: "desktop", grepInvert: /@offline/, use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1366, height: 800 } } },
-    { name: "mobile", grepInvert: /@offline/, use: { ...devices["Pixel 7"], channel: "chrome" } },
+    { name: "mobile", grepInvert: /@offline|@desktop-only/, use: { ...devices["Pixel 7"], channel: "chrome" } },
     { name: "offline", grep: /@offline/, use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1366, height: 800 } } },
   ],
 });
