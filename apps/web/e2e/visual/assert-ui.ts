@@ -28,14 +28,17 @@ const CONTROL_SELECTOR =
   'button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="option"], summary, input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
 const trackers = new WeakMap<Page, VisualTracker>();
-const CAPTURE_DIR = fileURLToPath(new URL("../../../../docs/agentic/visual-m2", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
+const CAPTURE_DIR = resolve(REPO_ROOT, "docs/agentic/visual-m2");
 
-/** Overrides the capture folder for one verification round (e.g. `docs/agentic/visual-verify-2026-11-26`). */
-export function setVisualCaptureDir(relativeToWebApp: string): void {
-  captureDir = resolve(fileURLToPath(new URL("../../..", import.meta.url)), relativeToWebApp);
+/**
+ * Optional per-call capture folder (repo-relative, e.g. `docs/agentic/visual-verify-2026-11-26`).
+ * It is passed explicitly instead of mutating module state, so a spec cannot change where another
+ * spec writes its screenshots when Playwright reuses the worker.
+ */
+export interface VisualCaptureOptions {
+  readonly captureDir?: string;
 }
-
-let captureDir = CAPTURE_DIR;
 
 export function trackVisualUi(page: Page): VisualTracker {
   const existing = trackers.get(page);
@@ -140,7 +143,11 @@ async function readSnapshot(page: Page): Promise<RawSnapshot> {
   }, CONTROL_SELECTOR);
 }
 
-export async function assertVisualUi(page: Page, label: string): Promise<void> {
+export async function assertVisualUi(
+  page: Page,
+  label: string,
+  options: VisualCaptureOptions = {},
+): Promise<void> {
   const tracker = trackVisualUi(page);
   const raw = await readSnapshot(page);
   const snapshot: VisualSnapshot = {
@@ -153,8 +160,9 @@ export async function assertVisualUi(page: Page, label: string): Promise<void> {
     dialogCalls: [...tracker.dialogCalls],
     focusedOutline: raw.focusedOutline,
   };
-  mkdirSync(captureDir, { recursive: true });
-  const screenshotPath = resolve(captureDir, `${label}-${snapshot.viewportWidth}.png`);
+  const directory = options.captureDir === undefined ? CAPTURE_DIR : resolve(REPO_ROOT, options.captureDir);
+  mkdirSync(directory, { recursive: true });
+  const screenshotPath = resolve(directory, `${label}-${snapshot.viewportWidth}.png`);
   mkdirSync(dirname(screenshotPath), { recursive: true });
   await page.screenshot({ path: screenshotPath, fullPage: true });
   assertVisualSnapshot(snapshot);
