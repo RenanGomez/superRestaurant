@@ -1,4 +1,4 @@
-import type { BranchMembershipListV1 } from "@super-restaurant/shared-types";
+import type { BranchMembershipListV1, RbacPermissionCode } from "@super-restaurant/shared-types";
 import { Inject, Injectable } from "@nestjs/common";
 
 import type { AuthenticatedPrincipal } from "../auth/authentication.js";
@@ -176,7 +176,7 @@ export class PurchasingService {
   public async listSuppliers(principal: AuthenticatedPrincipal, input: unknown): Promise<InventorySupplierListV1> {
     const query = parseSupplierListQuery(input);
     if (query === undefined) throw requestError();
-    await this.authorizeRestaurant(principal, query.restaurantId);
+    await this.authorizeRestaurant(principal, query.restaurantId, "catalog.read");
 
     const rows = await this.rows((database) => database.query(listSuppliersSql, [
       principal.actorId,
@@ -251,7 +251,7 @@ export class PurchasingService {
   ): Promise<PurchaseOrderListV1> {
     const query = parseOrderListQuery(input);
     if (query === undefined) throw requestError();
-    await this.authorizeBranch(principal, query.restaurantId, query.branchId);
+    await this.authorizeBranch(principal, query.restaurantId, query.branchId, "catalog.read");
 
     const rows = await this.rows((database) => database.query(listPurchaseOrdersSql, [
       principal.actorId,
@@ -313,6 +313,7 @@ export class PurchasingService {
     if (rows.length !== 1) throw unavailable();
     const order = toPurchaseOrder(rows[0]);
     if (order === undefined || order.id !== orderId) throw unavailable();
+    await this.authorizeBranch(principal, order.restaurantId, order.branchId, "catalog.read");
     return order;
   }
 
@@ -358,7 +359,11 @@ export class PurchasingService {
     return supplier;
   }
 
-  private async authorizeRestaurant(principal: AuthenticatedPrincipal, restaurantId: string): Promise<void> {
+  private async authorizeRestaurant(
+    principal: AuthenticatedPrincipal,
+    restaurantId: string,
+    permission: RbacPermissionCode = "catalog.manage",
+  ): Promise<void> {
     let memberships: BranchMembershipListV1;
     try {
       memberships = await this.directory.listActiveMemberships(principal);
@@ -367,7 +372,7 @@ export class PurchasingService {
     }
     const granted = memberships.memberships.some((membership) =>
       membership.scope.restaurantId === restaurantId
-      && rolesGrantPermission(membership.roles, "catalog.manage"));
+      && rolesGrantPermission(membership.roles, permission));
     if (!granted) throw new PurchasingApplicationError("authorization");
   }
 
@@ -375,9 +380,10 @@ export class PurchasingService {
     principal: AuthenticatedPrincipal,
     restaurantId: string,
     branchId: string,
+    permission: RbacPermissionCode = "catalog.manage",
   ): Promise<void> {
     try {
-      await this.authorization.authorizeBranch(principal, { restaurantId, branchId }, "catalog.manage");
+      await this.authorization.authorizeBranch(principal, { restaurantId, branchId }, permission);
     } catch {
       throw new PurchasingApplicationError("authorization");
     }

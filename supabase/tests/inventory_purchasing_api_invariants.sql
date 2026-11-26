@@ -4,6 +4,12 @@ do $test$
 declare
   manager uuid := gen_random_uuid();
   cashier uuid := gen_random_uuid();
+  viewer uuid := gen_random_uuid();
+  waiter uuid := gen_random_uuid();
+  auditor uuid := gen_random_uuid();
+  kitchen uuid := gen_random_uuid();
+  courier uuid := gen_random_uuid();
+  actor uuid;
   foreign_actor uuid := gen_random_uuid();
   r uuid := gen_random_uuid();
   r2 uuid := gen_random_uuid();
@@ -11,6 +17,11 @@ declare
   b2 uuid := gen_random_uuid();
   manager_membership uuid := gen_random_uuid();
   cashier_membership uuid := gen_random_uuid();
+  viewer_membership uuid := gen_random_uuid();
+  waiter_membership uuid := gen_random_uuid();
+  auditor_membership uuid := gen_random_uuid();
+  kitchen_membership uuid := gen_random_uuid();
+  courier_membership uuid := gen_random_uuid();
   foreign_membership uuid := gen_random_uuid();
   flour uuid := gen_random_uuid();
   sugar uuid := gen_random_uuid();
@@ -49,6 +60,11 @@ begin
   insert into auth.users(id, email) values
     (manager, 'inventory-purchasing-api-manager@invalid.test'),
     (cashier, 'inventory-purchasing-api-cashier@invalid.test'),
+    (viewer, 'inventory-purchasing-api-viewer@invalid.test'),
+    (waiter, 'inventory-purchasing-api-waiter@invalid.test'),
+    (auditor, 'inventory-purchasing-api-auditor@invalid.test'),
+    (kitchen, 'inventory-purchasing-api-kitchen@invalid.test'),
+    (courier, 'inventory-purchasing-api-courier@invalid.test'),
     (foreign_actor, 'inventory-purchasing-api-foreign@invalid.test');
   insert into app.restaurants(id, name, time_zone) values
     (r, 'inventory purchasing api', 'America/Hermosillo'),
@@ -59,10 +75,20 @@ begin
   insert into app.memberships(id, user_id, restaurant_id, branch_id, granted_by) values
     (manager_membership, manager, r, b, manager),
     (cashier_membership, cashier, r, b, cashier),
+    (viewer_membership, viewer, r, b, viewer),
+    (waiter_membership, waiter, r, b, waiter),
+    (auditor_membership, auditor, r, b, auditor),
+    (kitchen_membership, kitchen, r, b, kitchen),
+    (courier_membership, courier, r, b, courier),
     (foreign_membership, foreign_actor, r2, b2, foreign_actor);
   insert into app.membership_role_grants(membership_id, role_code, granted_by) values
     (manager_membership, 'manager', manager),
     (cashier_membership, 'cashier', cashier),
+    (viewer_membership, 'viewer', viewer),
+    (waiter_membership, 'waiter', waiter),
+    (auditor_membership, 'auditor', auditor),
+    (kitchen_membership, 'kitchen', kitchen),
+    (courier_membership, 'courier', courier),
     (foreign_membership, 'manager', foreign_actor);
   insert into app.inventory_items(id, restaurant_id, name, unit_code) values
     (flour, r, 'Purchasing flour', 'g'),
@@ -112,14 +138,21 @@ begin
   from app_private.list_inventory_suppliers(manager, r2, true);
   if row_count <> 0 then raise exception 'foreign supplier leaked into list'; end if;
 
-  -- A membership without a managing role raises; an actor with no membership sees nothing.
-  begin
-    perform app_private.list_inventory_suppliers(cashier, r, false);
-    raise exception 'cashier listed suppliers';
-  exception when others then
-    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
-    if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
-  end;
+  -- Catalog-read roles may list suppliers; kitchen and courier are forbidden.
+  foreach actor in array array[cashier, viewer, waiter, auditor] loop
+    select count(*) into row_count
+    from app_private.list_inventory_suppliers(actor, r, true);
+    if row_count <> 2 then raise exception 'catalog-read role listed % suppliers, expected 2', row_count; end if;
+  end loop;
+  foreach actor in array array[kitchen, courier] loop
+    begin
+      perform app_private.list_inventory_suppliers(actor, r, false);
+      raise exception 'role without catalog.read listed suppliers';
+    exception when others then
+      get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+      if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
+    end;
+  end loop;
   select count(*) into row_count
   from app_private.list_inventory_suppliers(foreign_actor, r, false);
   if row_count <> 0 then raise exception 'foreign actor listed suppliers'; end if;
@@ -137,6 +170,31 @@ begin
   select count(*) into row_count
   from app_private.read_inventory_supplier_for_manage(manager, foreign_supplier);
   if row_count <> 0 then raise exception 'read of a foreign supplier revealed a row'; end if;
+
+  -- Writes and the manage-only lookup stay closed to catalog-read roles.
+  foreach actor in array array[cashier, viewer, waiter, auditor] loop
+    begin
+      perform app_private.create_inventory_supplier(actor, r, 'Denied supplier', null, true);
+      raise exception 'catalog-read role created a supplier';
+    exception when others then
+      get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+      if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
+    end;
+    begin
+      perform app_private.update_inventory_supplier(actor, supplier, 'Denied update', null, true);
+      raise exception 'catalog-read role updated a supplier';
+    exception when others then
+      get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+      if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
+    end;
+    begin
+      perform app_private.read_inventory_supplier_for_manage(actor, supplier);
+      raise exception 'catalog-read role used the manage-only supplier lookup';
+    exception when others then
+      get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+      if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
+    end;
+  end loop;
 
   -- Two lines through the existing writer; the read must sum integer minor units.
   result := app_private.inventory_create_purchase_order(manager, r, b, pg_catalog.jsonb_build_object(
@@ -162,13 +220,20 @@ begin
   from app_private.list_inventory_purchase_orders(manager, r, b, 'received', 100);
   if row_count <> 0 then raise exception 'status filter returned % rows', row_count; end if;
 
-  begin
-    perform app_private.list_inventory_purchase_orders(cashier, r, b, null, 100);
-    raise exception 'cashier listed purchase orders';
-  exception when others then
-    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
-    if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
-  end;
+  foreach actor in array array[cashier, viewer, waiter, auditor] loop
+    select count(*) into row_count
+    from app_private.list_inventory_purchase_orders(actor, r, b, null, 100);
+    if row_count <> 1 then raise exception 'catalog-read role listed % purchase orders, expected 1', row_count; end if;
+  end loop;
+  foreach actor in array array[kitchen, courier] loop
+    begin
+      perform app_private.list_inventory_purchase_orders(actor, r, b, null, 100);
+      raise exception 'role without catalog.read listed purchase orders';
+    exception when others then
+      get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+      if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
+    end;
+  end loop;
 
   -- Detail returns the header plus both lines with their item names.
   select o.total_minor into total
@@ -188,17 +253,24 @@ begin
     raise exception 'detail is missing the flour line with its item name';
   end if;
 
-  -- Foreign orders are invisible and a non-managing member is denied.
+  -- Foreign orders are invisible; catalog-read roles may read, kitchen and courier are denied.
   select count(*) into row_count
   from app_private.read_inventory_purchase_order(manager, foreign_order);
   if row_count <> 0 then raise exception 'foreign purchase order was readable'; end if;
-  begin
-    perform app_private.read_inventory_purchase_order(cashier, order_id);
-    raise exception 'cashier read a purchase order detail';
-  exception when others then
-    get stacked diagnostics state = returned_sqlstate, err_message = message_text;
-    if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
-  end;
+  foreach actor in array array[cashier, viewer, waiter, auditor] loop
+    select count(*) into row_count
+    from app_private.read_inventory_purchase_order(actor, order_id);
+    if row_count <> 1 then raise exception 'catalog-read role read % purchase order rows, expected 1', row_count; end if;
+  end loop;
+  foreach actor in array array[kitchen, courier] loop
+    begin
+      perform app_private.read_inventory_purchase_order(actor, order_id);
+      raise exception 'role without catalog.read read a purchase order detail';
+    exception when others then
+      get stacked diagnostics state = returned_sqlstate, err_message = message_text;
+      if state <> '42501' or err_message <> 'INVENTORY_ACTOR_FORBIDDEN' then raise; end if;
+    end;
+  end loop;
 
   execute 'reset role';
 end $test$;
