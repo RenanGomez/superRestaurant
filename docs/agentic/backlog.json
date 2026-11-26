@@ -1543,7 +1543,7 @@
                       "deps":  [
                                    "m3-contracts"
                                ],
-                      "status":  "todo",
+                      "status":  "done",
                       "id":  "m3-api-purchasing",
                       "title":  "API de compras y recepcion",
                       "level":  "A",
