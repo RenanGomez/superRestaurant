@@ -20,10 +20,13 @@
  * - A transient IndexedDB I/O failure (`STORAGE_LOAD_FAILED` / `STORAGE_COMMIT_FAILED`)
  *   is surfaced as a rejected operation, never as a quarantine. The caller retries
  *   with the same idempotency key and the engine replays instead of duplicating.
- * - `release()` purges the local database **only** when the persisted outbox has no
- *   unconfirmed event. Any pending/blocked/review evidence keeps the store intact.
+ * - `release()` purges the local database **only** when every persisted outbox entry
+ *   is compactable according to the engine's own rule. Any non-compactable evidence
+ *   keeps the store intact, including financial entries in any state such as
+ *   `rejected` payments, which are audit evidence and are never compacted.
  */
 import {
+  canCompactOutboxEntry,
   DeviceSyncEngine,
   isTerminalState,
   SyncEngineError,
@@ -33,7 +36,6 @@ import {
   type DurableSyncStoragePort,
   type IdGeneratorPort,
   type OutboxEntry,
-  type OutboxState,
   type ReplicaEntity,
   type SyncTransportPort,
 } from "@super-restaurant/sync-engine";
@@ -106,9 +108,12 @@ export interface WebSyncBridgeOpenOptions {
 }
 
 export interface WebSyncReleaseOutcome {
-  /** True only when nothing was left unconfirmed and the local database was deleted. */
+  /** True only when every persisted outbox entry was compactable and the store was deleted. */
   readonly purged: boolean;
-  /** Number of persisted events that were not `accepted`/`duplicate` at release time. */
+  /**
+   * Number of persisted events retained as evidence because the engine may not compact
+   * them: pending/blocked/review entries and *all* financial entries, rejected included.
+   */
   readonly retainedUnconfirmed: number;
 }
 
@@ -143,6 +148,16 @@ const COMMIT_KINDS: Readonly<Record<string, Omit<CommitMapping, "entityId" | "pa
   order_create: { entityType: "Order", operation: "create" },
   order_add_line: { entityType: "OrderItem", operation: "create" },
   cash_collect: { entityType: "Payment", operation: "create" },
+});
+
+/**
+ * `release()` asks whether an entry may be compacted *right now*, so age never hides
+ * evidence (`olderThanMs` is infinite) and chain references are irrelevant: the store
+ * is discarded as a whole only when no entry would be retained for any reason.
+ */
+const RELEASE_COMPACTION_CONTEXT = Object.freeze({
+  olderThanMs: Number.POSITIVE_INFINITY,
+  referencedEventIds: new Set<string>(),
 });
 
 function protocolConnectivity(): SyncConnectivityStateV1 {
@@ -571,14 +586,22 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
     try {
       const raw = await storage.loadState(options.deviceId);
       const outbox = raw !== null && typeof raw === "object" && Array.isArray((raw as { outbox?: unknown }).outbox)
-        ? (raw as { outbox: readonly { localState: OutboxState }[] }).outbox
+        ? (raw as { outbox: readonly OutboxEntry[] }).outbox
         : [];
-      return outbox.filter((entry) => !isTerminalState(entry.localState)).length;
+      // An entry retains the store unless the engine itself may compact it. Reusing
+      // `canCompactOutboxEntry` keeps the financial-evidence rule in one place: rejected
+      // payments are terminal but never compactable, so they are always retained.
+      return outbox.filter((entry) => !canCompactOutboxEntry(entry, RELEASE_COMPACTION_CONTEXT)).length;
     } catch {
       return -1;
     }
   };
 
+  /**
+   * Seals the bridge against new commits, then deletes the local database only when every
+   * persisted outbox entry is compactable. Any non-compactable entry — pending, blocked,
+   * in review, or financial in any state including `rejected` — is retained as evidence.
+   */
   const release = (): Promise<WebSyncReleaseOutcome> => {
     if (releasePromise !== undefined) return releasePromise;
     const run = (async (): Promise<WebSyncReleaseOutcome> => {
@@ -601,7 +624,8 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
       // between the first check and now must win, never be silently deleted.
       if (unconfirmed === 0) unconfirmed = await countUnconfirmed();
 
-      // Only a fully reconciled store may be deleted: anything not confirmed is evidence.
+      // Only a store with no non-compactable evidence may be deleted; rejected
+      // financial entries are evidence too, even though they are terminal.
       if (unconfirmed === 0) {
         try {
           if (options.purgeStore !== undefined) {
