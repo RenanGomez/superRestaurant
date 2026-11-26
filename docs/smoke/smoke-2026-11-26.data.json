@@ -1,5 +1,5 @@
 {
-  "sub": "Ronda 2026-11-26 (Ola 4): verificadores historicos corriendo otra vez, lecturas de compras con catalog.read, migracion 01400 aplicada en dev e identidad de dispositivo estable. Las revisiones de M2 dejaron abiertos dos P1 de purga offline y el lider entre pestanas.",
+  "sub": "Ronda 2026-11-26 (Ola 5, primer corte): la purga offline y el liderazgo del sync ya tienen cableado de produccion (#138) y el spec visual de KDS offline dejo de poder dar verde falso (#139). M2 sigue sin declararse al 100% por o0-device-registry. Sin verificacion visual en navegador en esta sesion.",
   "sections": [
     {
       "t": "0. Preparación",
@@ -142,6 +142,18 @@
   "r2": {},
   "changes": [
     {
+      "h": "Purga offline cableada (P1 de M2)",
+      "p": "sign_out y auth_revoked ya aplican la politica: sin evidencia se borra el estado del dispositivo; con evidencia se purga la replica, se conserva el outbox y se limpian los cursores. Una revocacion bloquea el almacen, purga la replica y libera el sello solo sobre la evidencia retenida. Probado de punta a punta con almacen real (fake-indexeddb)."
+    },
+    {
+      "h": "Un solo lider de sync por dispositivo (P2 de M2)",
+      "p": "Solo la pestana lider abre el puente y sincroniza. La segunda pestana muestra en la barra por que no sincroniza, toma el relevo cuando la lider cierra y, si pierde el lock, descarta el motor y reabre con la misma idempotency key."
+    },
+    {
+      "h": "Spec visual de KDS offline mas estricta",
+      "p": "La ruta y la sucursal se comprueban tras navegar (una redireccion a /app o /login ya falla el pase), networkidle no se silencia y el auditor mide limites por eje, rem/em y ::after."
+    },
+    {
       "h": "Verificadores historicos desde cero",
       "p": "verify:menu-shared-modifier-groups-schema:rollback, verify:menu-locked-ingredients-schema:rollback y verify:capture-schema:rollback vuelven a correr sobre un PostgreSQL desechable: fixture normalizado a begin/commit, copias pineadas en supabase/tests/historical, seed corregido y modo local de capture. Antes ninguno de los tres podia ejecutarse."
     },
@@ -175,6 +187,14 @@
     }
   ],
   "decisions": [
+    {
+      "h": "El sello de una revocacion dura lo que la replica",
+      "p": "Bloquear el almacen y purgar la replica dejaba el outbox sin enviar ilegible para siempre (no hay desbloqueo y un scope revocado es terminal): se libera el sello cuando la replica ya no existe, porque retener evidencia ilegible equivale a perderla."
+    },
+    {
+      "h": "Sin revision cruzada en este corte",
+      "p": "Codex y Gemini sin cuota y la sesion prohibe subagentes Claude: la puerta de revision por otra familia no tuvo motor independiente. Se hizo una segunda pasada del orquestador que encontro y corrigio el defecto del sello."
+    },
     {
       "h": "M2 no se declara al 100%",
       "p": "Las revisiones de la Ola 0 encontraron dos P1 de purga offline (decideOfflinePurge sin llamador y purgeReplica rechazando STORAGE_LOCKED) y un P2 de lider entre pestanas. Se abren o0-purge-wire y o0-leader-wire; sin ellos M2 no se cierra."

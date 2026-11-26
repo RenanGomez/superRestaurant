@@ -101,9 +101,12 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   `docs/architecture/P2_MULTICHANNEL_CAPTURE_SLICE.md:7` sigue documentando el verificador como remoto.
   Dueño: verificadores. Accion: ignorar la variable en local y actualizar el doc.
 - **P2 · identidad de dispositivo por equipo** — `debt-device-id` (Ola 4) la persiste por perfil de
-  navegador y documenta que el servidor autoriza por actor; validar `x-device-id` y el `deviceId` de
-  recepcion contra `app.sync_devices` exige una funcion `app_private` de lectura + migracion.
-  Dueño: inventario/sync. Accion: crear esa funcion y la prueba de rechazo de dispositivo ajeno.
+  navegador y documenta que el servidor autoriza por actor. **Hallazgo de la Ola 5:** validar el
+  `deviceId` de inventario contra `app.sync_devices` tal cual está hoy haría `unknown` a todo equipo
+  (el id de inventario no es el id derivado por actor que registra el puente de sync) y rechazaría a
+  todo equipo compartido. `o0-device-registry` exige primero derivarlo por actor y registrarlo antes de
+  escribir. Dueño: inventario/sync. Accion: decidir derivacion + registro y añadir la prueba de rechazo
+  de dispositivo ajeno.
 - **P2 · `SYNC_CURSOR_SECRET` de produccion** — rotarlo invalida cursores. Dueño: operacion.
   Accion: definirlo (>=32) antes de desplegar y documentar la rotacion en el runbook.
 - **P2 · `registerId = deviceId` en el cobro mobile** — no descubre ni permite elegir otra caja abierta
@@ -148,6 +151,15 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
 
 ## Archivada — sin impacto (2026-11-26)
 
+- **2026-11-26 · P1 purga offline sin llamador de producción y `purgeReplica` rechazando `STORAGE_LOCKED`**
+  — resuelto en #138: `sign_out` y `auth_revoked` aplican `decideOfflinePurge`; la revocación bloquea,
+  purga la réplica con `allowLocked` y libera el sello sobre la evidencia retenida. `purge()` ya no
+  encola un borrado entre pestañas.
+- **2026-11-26 · P2 líder de sync sin consumidor productivo y seguidor sin timeout** — resuelto en #138:
+  `runtime-sync-runner` abre el puente solo en el líder, el seguidor resuelve con timeout y explica el
+  motivo, y la pérdida del lock descarta el motor y reintenta con la misma idempotency key.
+- **2026-11-26 · P2 spec visual de KDS offline con falso verde** — resuelto en #139: ruta y sucursal
+  reales, `networkidle` sin `catch` y casos límite del auditor por eje.
 - **2026-11-26 · P2 verificador historico de grupos compartidos** — resuelto en PR #130 (fixture
   `begin;/commit;` + copias pineadas pre-`20261102000100`).
 - **2026-11-26 · P2 verificador historico de Capture** — resuelto en PR #130 (modo local desechable +
