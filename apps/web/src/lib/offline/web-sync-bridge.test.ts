@@ -297,6 +297,51 @@ test("release conserva un cash_collect rechazado porque es evidencia no compacta
   assert.equal(persisted.outbox?.[0]?.localState, "rejected");
 });
 
+test("AUTH_REVOKED bloquea el almacen, purga la replica y conserva el outbox como evidencia", async () => {
+  const factory = new IDBFactory();
+  const storage = await openStorage(factory, "auth-revoked");
+  const revokedTransport: SyncTransportPort = {
+    pull: (request) => Promise.resolve(pullResponse(request.scope)),
+    push: () => Promise.reject(new SyncTransportError("DEVICE_REVOKED", false)),
+  };
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    deviceId: device,
+    ids: idGenerator(),
+    storage,
+    transport: revokedTransport,
+  });
+
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "revoked-order")))?.committed, true);
+  assert.equal((await bridge.commitLocalOperation({ ...commitInput(scopeA, "revoked-collect"), kind: "cash_collect" }))?.committed, true);
+
+  await bridge.syncNow(scopeA);
+
+  // The seal is visible: the scope reports revoked, never "storage unavailable".
+  const snapshot = bridge.getSnapshot(scopeA);
+  assert.equal(snapshot.scopeRevoked, true);
+  assert.equal(snapshot.storageReady, true);
+  assert.equal(snapshot.events.length, 2);
+  assert.equal(snapshot.events.find((event) => event.financial)?.localState, "manual_review");
+
+  // No new evidence may enter a revoked store, and the operator cannot force a sync.
+  const late = await bridge.commitLocalOperation(commitInput(scopeA, "after-revocation"));
+  assert.equal(late?.committed, false);
+  assert.equal(late?.code, "SCOPE_REVOKED");
+  const retried = await bridge.retryPending(scopeA);
+  assert.equal(retried.ok, false);
+  assert.equal(retried.code, "SYNC_BLOCKED");
+  assert.equal((await bridge.requestResync(scopeA)).ok, false);
+
+  // The store is locked: the revoked credential cannot decrypt the replica again.
+  await assert.rejects(storage.loadState(device), (error: unknown) => error instanceof Error && "code" in error && error.code === "STORAGE_LOCKED");
+
+  const released = await bridge.release();
+  assert.equal(released.action, "lock_and_purge_replica");
+  assert.equal(released.purged, false);
+  assert.equal(released.retainedUnconfirmed, 2);
+});
+
 test("release purga cuando el único evento es un order aceptado no financiero", async () => {
   const factory = new IDBFactory();
   let purgeCalls = 0;

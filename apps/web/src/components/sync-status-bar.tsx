@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { BranchScope, SyncConnectivityStateV1 } from "@super-restaurant/shared-types";
 
 import { checkSyncConnectivityAction } from "../app/app/sync/actions";
+import { getSyncFollowerNotice } from "../lib/offline/runtime-sync-runner";
 import {
   deriveConnectivityState,
   EMPTY_WEB_SYNC_SNAPSHOT,
@@ -62,11 +63,13 @@ export function SyncStatusBar({
   const [confirmedAt, setConfirmedAt] = useState<string | null>(initialConfirmedAt);
   const [openReviewCount, setOpenReviewCount] = useState<number>(0);
   const [snapshot, setSnapshot] = useState<WebSyncUiSnapshot>(EMPTY_WEB_SYNC_SNAPSHOT);
+  const [followerNotice, setFollowerNotice] = useState<string | null>(() => getSyncFollowerNotice());
 
   const lastProbeAtRef = useRef(0);
   const probingRef = useRef(false);
 
   const readBridgeSnapshot = useCallback((): void => {
+    setFollowerNotice(getSyncFollowerNotice());
     if (scope === undefined) {
       setSnapshot(EMPTY_WEB_SYNC_SNAPSHOT);
       return;
@@ -229,6 +232,12 @@ export function SyncStatusBar({
         <span className="text-xs text-text-muted">
           {formattedTime !== null ? `Última confirmación: ${formattedTime}` : "Última confirmación: sin confirmar"}
         </span>
+
+        {followerNotice !== null && (
+          <span role="note" className="text-xs text-text-muted">
+            {followerNotice}
+          </span>
+        )}
       </div>
 
       <Link
