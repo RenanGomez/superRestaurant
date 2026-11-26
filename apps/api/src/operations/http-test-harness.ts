@@ -5,7 +5,7 @@ import { HTTP_TEST_ACTORS, provisionHttpFixtures, type HttpTestActorName, type H
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
 
 export type Json = Record<string, unknown>;
-export type HttpMethod = "GET" | "POST" | "PUT";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH";
 
 export interface HttpFlowContext {
   readonly admin: LocalPostgres["admin"];
