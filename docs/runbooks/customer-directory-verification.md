@@ -20,7 +20,7 @@ Requiere el secreto administrativo local ignorado `.env.adr010.local` y la CA `.
 
 ```powershell
 npm.cmd run build --prefix apps/api
-node --env-file=.env.adr010.local --input-type=module -e "const u=new URL(process.env.ADR010_DATABASE_URL); u.searchParams.delete('sslrootcert'); process.env.SCHEMA_VERIFICATION_CONFIRMATION='ROLLBACK_ONLY'; process.env.SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF='zwbyiefqeujstyzysydn'; process.env.SCHEMA_VERIFICATION_DATABASE_URL=u.toString(); process.env.SCHEMA_VERIFICATION_CA_CERT_PATH='.certs/prod-ca-2021.crt'; process.env.CUSTOMER_ADAPTER_VERIFICATION='ROLLBACK_ONLY_APP_API_HTTP'; process.argv.push('--remote-only'); await import('./apps/api/dist/operations/run-capture-schema-verification.js');"
+node --env-file=.env.adr010.local --input-type=module -e "const u=new URL(process.env.ADR010_DATABASE_URL); u.searchParams.delete('sslrootcert'); process.env.SCHEMA_VERIFICATION_CONFIRMATION='ROLLBACK_ONLY'; process.env.SCHEMA_VERIFICATION_EXPECTED_PROJECT_REF='zwbyiefqeujstyzysydn'; process.env.SCHEMA_VERIFICATION_DATABASE_URL=u.toString(); process.env.SCHEMA_VERIFICATION_CA_CERT_PATH='.certs/prod-ca-2021.crt'; process.env.CUSTOMER_ADAPTER_VERIFICATION='ROLLBACK_ONLY_APP_API_HTTP'; process.argv.push('run-capture-schema-verification','--remote-only'); await import('./apps/api/dist/operations/run-capture-schema-verification.js');"
 ```
 
 El permiso SET temporal ya autorizado se limita a la misma transacción; guard exige postgres y membresía original ADMIN=true/INHERIT=false/SET=false antes del GRANT temporal. RESET ROLE y SET=false preceden al catálogo candidato. El postcheck exige también opciones/grantor originales. Ninguna autorización persistente se infiere de este ensayo.
