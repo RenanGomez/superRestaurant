@@ -15,7 +15,7 @@ import type { SyncEventExecutor } from "./sync-push.service.js";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 type RejectionReason = "AUTH_REVOKED" | "ACTOR_MISMATCH" | "INVALID_SCOPE" | "DEVICE_REVOKED" | "DEVICE_UNKNOWN";
-type RejectionCode = "AUTH_REVOKED" | "DEVICE_REVOKED" | "DEVICE_UNKNOWN" | "ACTOR_MISMATCH";
+type RejectionCode = "AUTH_REVOKED" | "DEVICE_REVOKED" | "DEVICE_UNKNOWN" | "ACTOR_MISMATCH" | "INVALID_SCOPE";
 interface SyncRejection { readonly code: RejectionCode; readonly reason: RejectionReason; }
 
 /**
@@ -25,10 +25,11 @@ interface SyncRejection { readonly code: RejectionCode; readonly reason: Rejecti
  * they travel with their own code (`SYNC_RECOVERABLE_REJECTION_CODES`) and none of these
  * rejections is written to the ledger, so the device can register or re-authenticate and
  * retry the same evidence instead of sending pending financial movements to manual review.
- * `INVALID_SCOPE` stays on the revocation path (see debt: a client shipping another tenant's
- * scope should be rejected per event, not revoke the device).
+ * `INVALID_SCOPE` is a terminal rejection of the event; the client scope stays active because
+ * a malformed scope says nothing about the credentials or device.
  */
 export function classifyRejection(reason: RejectionReason): SyncRejection {
+  if (reason === "INVALID_SCOPE") return { code: "INVALID_SCOPE", reason };
   if (reason === "DEVICE_UNKNOWN" || reason === "ACTOR_MISMATCH") return { code: reason, reason };
   return reason === "DEVICE_REVOKED" ? { code: "DEVICE_REVOKED", reason } : { code: "AUTH_REVOKED", reason };
 }
