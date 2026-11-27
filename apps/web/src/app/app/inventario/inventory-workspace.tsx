@@ -351,7 +351,7 @@ export function InventoryWorkspace({ action, actorId, canManage, initialTab, sco
             action={action}
             canManage={canManage}
             deviceId={device.deviceId}
-            deviceReady={device.ready}
+            deviceStatus={device.status}
             items={items.status === "ready" ? items.value : []}
             warehouses={warehouses.status === "ready" ? warehouses.value : []}
             itemsStatus={items.status}
@@ -367,7 +367,7 @@ export function InventoryWorkspace({ action, actorId, canManage, initialTab, sco
             action={action}
             canManage={canManage}
             deviceId={device.deviceId}
-            deviceReady={device.ready}
+            deviceStatus={device.status}
             items={items.status === "ready" ? items.value : []}
             itemsStatus={items.status}
             warehouses={warehouses.status === "ready" ? warehouses.value : []}
