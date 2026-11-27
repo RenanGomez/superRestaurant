@@ -13,11 +13,11 @@ ARRANQUE (no leas archivos de más de 300 líneas)
    `docs/agentic/status.md` y `docs/agentic/backlog.json` (solo items que no estén `done`).
 2. Verifica con `git log --oneline -5`, `git status` y `gh pr list --state open`.
 
-Estado esperado: `main` en `a8ef9c30` o posterior; Ola 5 con `o0-purge-wire` (P1), `o0-leader-wire`
-(P2), `o5-visual-spec-fix` y `o5-sync-rejection-map` ya fusionados (#138, #139, #141) y
-`o5-func-comments` fusionado pero **sin aplicar** en dev (#142). Dev hasta `20261126001400`; M3 al 100 %
-del alcance fusionado; **M2 NO declarado al 100 %** por `o0-device-registry` únicamente. La prueba del
-operador sigue pendiente: no muevas filas de «Día operable» a DONE.
+Estado esperado: `main` en `85fdfa23` o posterior; Ola 5 con `o0-purge-wire` (P1), `o0-leader-wire` (P2),
+`o5-visual-spec-fix`, `o5-sync-rejection-map` y `o5-func-comments` fusionados (#138–#142) y dev en
+`20261126001500`. M3 al 100 % del alcance fusionado; **M2 NO declarado al 100 %** por
+`o0-device-registry` únicamente. La prueba del operador sigue pendiente: no muevas filas de «Día
+operable» a DONE.
 
 PASO 0 OBLIGATORIO — PREFLIGHT READ_ONLY
 
@@ -47,16 +47,13 @@ OLA 5 — CERRAR M2, en este orden (detalle y criterios en el plan §1)
    cuota, páusala sobre `web-sync-bridge.ts`, `sync-store.ts`, `sync-leader.ts`,
    `runtime-sync-runner.ts` y `sync-merge-executor.ts` (el corte se auto-revisó sin motor independiente,
    ver HANDOFF).
-1. **Aplicar `20261126001500_inventory_purchasing_read_comments`** (A) con el protocolo §19.6: sonda
-   rollback-only → respaldo schema-only verificado → dry-run exacto → apply único → postcheck → segundo
-   dry-run. Requiere Docker Desktop arriba o `pg_dump` en el PATH; sin eso, no se toca dev. Al terminar,
-   pasar `o5-func-comments` a done y actualizar `lastRemote`.
-2. **`o0-device-registry`** (dsh, A): cablear `app_private.sync_device_state` (ya existe con `EXECUTE`
-   para `app_api`) en movimientos y recepción, registrar el equipo antes de escribir y probar el rechazo
-   de dispositivo ajeno/`unknown`. **Decisión previa obligatoria:** el `deviceId` de inventario es un
-   UUID por perfil, distinto del id derivado por actor que registra el puente de sync; validarlo tal cual
-   haría `unknown` a todo equipo y rechazaría equipos compartidos. Derívalo por actor (como
-   `syncDeviceIdForActor`) y regístralo, o documenta por qué no se valida.
+1. ~~Aplicar `20261126001500_inventory_purchasing_read_comments`~~ — **hecho**: aplicada a dev con §19.6
+   (`lastRemote=20261126001500`, postcheck y segundo dry-run `upToDate`, comentarios verificados). Si el
+   preflight de arranque muestra una candidata nueva, aplícala con el protocolo completo.
+2. **`o0-device-registry`** (dsh, A, **decisión ya tomada: opción 1**): derivar el `deviceId` de
+   inventario por actor (como `syncDeviceIdForActor`), registrarlo antes de escribir y validarlo con
+   `app_private.sync_device_state` en movimientos y recepción; prueba de rechazo de dispositivo ajeno y
+   documentación del cambio de identidad.
 3. **`o5-compras-ui-read`** (dsh, C): panel de compras legible con `catalog.read` (ocultando solo
    escrituras) y su verificación en navegador real (necesita la sesión de Playwright renovada).
 4. **Cierre** (tú, D): HANDOFF, `status.md`, `backlog.json`, `debt.md` y smoke; declarar M2 al 100 % solo

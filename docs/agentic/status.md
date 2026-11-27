@@ -1,6 +1,6 @@
 # Estado del loop
 
-Actualizado: 2026-11-26 (Ola 5, segundo corte: mapeo de rechazos del sync; migración de comentarios pendiente de aplicar)
+Actualizado: 2026-11-26 (Ola 5, segundo corte: rechazos recuperables del sync y `lastRemote=20261126001500`)
 
 - **M1:** cerrado. **M2:** cerrado formalmente, **sin declarar al 100 %**: `o0-purge-wire` y `o0-leader-wire`
   están fusionados y probados (#138), pero falta `o0-device-registry` (validar el `deviceId` de inventario
@@ -31,11 +31,12 @@ Actualizado: 2026-11-26 (Ola 5, segundo corte: mapeo de rechazos del sync; migra
   - `o5-sync-rejection-map` **DONE** (#141): `DEVICE_UNKNOWN`/`ACTOR_MISMATCH` viajan con su código, el
     motor los reintenta con backoff (scope activo, evidencia intacta, sin `manual_review`) y el puente
     re-registra el equipo. `INVALID_SCOPE` sigue revocando (P3 documentado).
-  - `o5-func-comments` **REVIEW** (#142): migración `20261126001500` solo de comentarios, validada desde
-    cero en CI y **sin aplicar en dev** porque esta máquina no tiene `pg_dump` ni Docker en marcha para el
-    respaldo verificable de §19.6. `lastRemote=20261126001400`.
+  - `o5-func-comments` **DONE** (#142): migración `20261126001500` solo de comentarios, validada desde
+    cero en CI y **aplicada a dev** con el protocolo §19.6 (sonda 3 sentencias `ok`, respaldo 1 391 471
+    bytes/130 tablas, dry-run exacto, apply único, postcheck `upToDate` y segundo dry-run `upToDate`;
+    comentarios leídos de `pg_description`). `lastRemote=20261126001500`.
   - Servidores locales levantados con `SYNC_CURSOR_SECRET` efímero (sin él la API no arranca); la sesión
     de Playwright sigue caducada y falta el login manual.
-- **Siguiente ola:** aplicar `20261126001500` con Docker/`pg_dump` disponibles; `o0-device-registry` (A)
-  tras decidir la derivación del `deviceId` de inventario por actor; `o5-compras-ui-read` (C) con sesión
+- **Siguiente ola:** `o0-device-registry` (A) con la decisión ya tomada (**derivar el `deviceId` de
+  inventario por actor**, registrarlo antes de escribir y validarlo); `o5-compras-ui-read` (C) con sesión
   de Playwright viva. Plan: `docs/plans/plan-2026-11-27-ola5-m2-m4.md`.
