@@ -142,6 +142,10 @@
   "r2": {},
   "changes": [
     {
+      "h": "Rechazos recuperables del sync ya no revocan el equipo",
+      "p": "Si el servidor no conoce el equipo (DEVICE_UNKNOWN) o el token es de otro actor (ACTOR_MISMATCH), el movimiento se reintenta con la misma clave y el equipo vuelve a registrarse; antes el scope quedaba revocado y las ventas pendientes se mandaban a revision manual."
+    },
+    {
       "h": "Purga offline cableada (P1 de M2)",
       "p": "sign_out y auth_revoked ya aplican la politica: sin evidencia se borra el estado del dispositivo; con evidencia se purga la replica, se conserva el outbox y se limpian los cursores. Una revocacion bloquea el almacen, purga la replica y libera el sello solo sobre la evidencia retenida. Probado de punta a punta con almacen real (fake-indexeddb)."
     },
@@ -187,6 +191,10 @@
     }
   ],
   "decisions": [
+    {
+      "h": "20261126001500 sin aplicar en dev",
+      "p": "La migracion de comentarios de compras esta validada en CI pero no se aplico: esta maquina no tiene pg_dump ni Docker en marcha, y 19.6 exige respaldo verificable. No se toco el historial ni se edito una migracion aplicada."
+    },
     {
       "h": "El sello de una revocacion dura lo que la replica",
       "p": "Bloquear el almacen y purgar la replica dejaba el outbox sin enviar ilegible para siempre (no hay desbloqueo y un scope revocado es terminal): se libera el sello cuando la replica ya no existe, porque retener evidencia ilegible equivale a perderla."

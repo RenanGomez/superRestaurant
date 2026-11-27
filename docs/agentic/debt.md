@@ -42,9 +42,16 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   inventario. Accion: cuando cambie la matriz, cambiar la migracion; considerar una prueba que compare
   ambos conjuntos.
 - **P3 · comentarios «manage-only» desactualizados en la BD (PR #131)** — `comment on function` de
-  `20261126001000` sigue describiendo las tres lecturas como solo-manager; no se puede corregir
-  editando una migracion aplicada. Dueño: inventario. Accion: migracion de comentarios en el proximo
-  cambio del modulo.
+  `20261126001000` sigue describiendo las tres lecturas como solo-manager. La migración nueva
+  `20261126001500_inventory_purchasing_read_comments` (#142) ya corrige los tres comentarios, pero
+  **no se aplicó en dev**: falta el respaldo verificable (§19.6). Dueño: inventario. Accion: aplicar
+  con el protocolo completo en la próxima sesión.
+- **P3 · `INVALID_SCOPE` sigue en la ruta de revocación** (`sync-merge-executor.ts`): un cliente que
+  envíe el scope de otro tenant recibe `AUTH_REVOKED` y pierde el scope entero en lugar de un rechazo
+  por evento. Dueño: sync. Accion: emitir `INVALID_SCOPE` propio y decidir si es terminal por evento.
+- **P3 · `correlationId` por evento, no por petición de push** — cada ejecución genera un `randomUUID`
+  propio; sirve para trazar evento a evento pero no agrupa el batch. Dueño: sync. Accion: propagar el
+  id de la petición y conservar el del evento en el detalle.
 - **P3 · `items.service.ts` mapea cualquier `42501` a 403** — un fallo real de privilegios se presenta
   como "no autorizado". Dueño: API. Accion: distinguir por `message` acotado cuando exista un segundo
   42501.
@@ -71,24 +78,6 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   añadir los casos limite que faltan (44×43, 43×44, inset en `rem`, `::after`, control `static`).
 
 ### Offline, dispositivos y configuracion
-- **P1 · la purga offline no esta conectada en produccion (`o0-rev-web-purge`, 2026-11-26)** —
-  `decideOfflinePurge` (`apps/web/src/lib/offline/sync-purge.ts:25-44`) no tiene llamador de
-  produccion: el sign-out real usa `store.purge()` del puente y `AUTH_REVOKED`
-  (`web-sync-bridge.ts:409-410`) solo pone `sync_blocked`. Ademas `purgeReplica`
-  (`sync-store.ts:305-306`) rechaza con `STORAGE_LOCKED`, asi que "bloquear y purgar la replica" es
-  inalcanzable por construccion. Dueño: web offline. Accion: cablear el evento en el runtime, permitir
-  la purga de replica con el meta bloqueado conservando la clave del outbox, y pruebas end-to-end.
-- **P2 · el lider de pestañas no tiene consumidor productivo** — `offline-runtime-mount.tsx:84-102` no
-  usa `acquireSyncLeader` (#73 lo dejo como modulo y #85 solo registro la prueba), asi que varias
-  pestañas siguen corriendo su propio `DeviceSyncEngine`. Por esto `o0-wire` no cierra. Dueño: web
-  offline. Accion: montar el lider, no sincronizar en seguidores y probar la perdida de lock.
-- **P2 · `acquireSyncLeader` sin timeout para el seguidor** (`sync-leader.ts:49-51,97`): mientras el
-  lider vive, el seguidor nunca resuelve y no puede pintar su cola. Dueño: web offline. Accion:
-  `AbortSignal`/timeout y resultado explicito de "no soy lider".
-- **P2 · `ACTOR_MISMATCH`/`DEVICE_UNKNOWN` se siguen emitiendo como `AUTH_REVOKED`/`DEVICE_REVOKED`**
-  (`apps/api/src/sync/sync-merge-executor.ts:48-55`): el cliente revoca scope y manda financieros
-  pendientes a revision manual por causas que no son revocacion. Dueño: sync. Accion: separar el cable
-  (no solo el log) o justificar la retencion con una prueba de comportamiento.
 - **P2 · la pestaña Compras queda vacia para `viewer`/`auditor` (PR #131)** — los `useEffect` de
   `apps/web/src/app/app/inventario/purchasing-panel.tsx:113,138,163` no cargan sin `canManage`, aunque
   la API ya permite leer. Dueño: UI inventario. Accion: cargar con `catalog.read` y ocultar solo las
@@ -151,6 +140,10 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
 
 ## Archivada — sin impacto (2026-11-26)
 
+- **2026-11-26 · P2 `ACTOR_MISMATCH`/`DEVICE_UNKNOWN` emitidos como revocación** — resuelto en #141:
+  cada causa viaja con su código (`SYNC_RECOVERABLE_REJECTION_CODES`), el motor la trata como reintento
+  con backoff y el puente vuelve a registrar el equipo; los financieros pendientes ya no van a
+  `manual_review` por una causa recuperable.
 - **2026-11-26 · P1 purga offline sin llamador de producción y `purgeReplica` rechazando `STORAGE_LOCKED`**
   — resuelto en #138: `sign_out` y `auth_revoked` aplican `decideOfflinePurge`; la revocación bloquea,
   purga la réplica con `allowLocked` y libera el sello sobre la evidencia retenida. `purge()` ya no

@@ -1,6 +1,6 @@
 # Estado del loop
 
-Actualizado: 2026-11-26 (Ola 5, primer corte: purga y liderazgo del sync offline; M2 sigue abierto por `o0-device-registry`)
+Actualizado: 2026-11-26 (Ola 5, segundo corte: mapeo de rechazos del sync; migración de comentarios pendiente de aplicar)
 
 - **M1:** cerrado. **M2:** cerrado formalmente, **sin declarar al 100 %**: `o0-purge-wire` y `o0-leader-wire`
   están fusionados y probados (#138), pero falta `o0-device-registry` (validar el `deviceId` de inventario
@@ -27,7 +27,15 @@ Actualizado: 2026-11-26 (Ola 5, primer corte: purga y liderazgo del sync offline
   PostgreSQL, Playwright). Verificación visual real **no** ejecutada en esta sesión.
 - **Puerta humana pendiente:** la prueba única del operador (D1–D7, T1–T4, seis pestañas de inventario)
   sigue sin registrarse; ninguna fila de «Día operable» pasa a DONE.
-- **Siguiente ola:** `o0-device-registry` (A) — decidir si el `deviceId` de inventario se deriva por actor
-  y se registra antes de escribir, o la validación contra `app.sync_devices` rechazará equipos
-  compartidos — y después `o5-sync-rejection-map` (B), `o5-func-comments` (A, migración nueva con §19.6) y
-  `o5-compras-ui-read` (C). Plan: `docs/plans/plan-2026-11-27-ola5-m2-m4.md`.
+- **Ola 5, segundo corte (fusionado en `main` `a8ef9c30`):**
+  - `o5-sync-rejection-map` **DONE** (#141): `DEVICE_UNKNOWN`/`ACTOR_MISMATCH` viajan con su código, el
+    motor los reintenta con backoff (scope activo, evidencia intacta, sin `manual_review`) y el puente
+    re-registra el equipo. `INVALID_SCOPE` sigue revocando (P3 documentado).
+  - `o5-func-comments` **REVIEW** (#142): migración `20261126001500` solo de comentarios, validada desde
+    cero en CI y **sin aplicar en dev** porque esta máquina no tiene `pg_dump` ni Docker en marcha para el
+    respaldo verificable de §19.6. `lastRemote=20261126001400`.
+  - Servidores locales levantados con `SYNC_CURSOR_SECRET` efímero (sin él la API no arranca); la sesión
+    de Playwright sigue caducada y falta el login manual.
+- **Siguiente ola:** aplicar `20261126001500` con Docker/`pg_dump` disponibles; `o0-device-registry` (A)
+  tras decidir la derivación del `deviceId` de inventario por actor; `o5-compras-ui-read` (C) con sesión
+  de Playwright viva. Plan: `docs/plans/plan-2026-11-27-ola5-m2-m4.md`.
