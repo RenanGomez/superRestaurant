@@ -41,11 +41,9 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   `20261126001400_inventory_purchasing_reads.sql` copia `apps/api/src/auth/rbac-policy.ts`. Dueño:
   inventario. Accion: cuando cambie la matriz, cambiar la migracion; considerar una prueba que compare
   ambos conjuntos.
-- **P3 · comentarios «manage-only» desactualizados en la BD (PR #131)** — `comment on function` de
-  `20261126001000` sigue describiendo las tres lecturas como solo-manager. La migración nueva
-  `20261126001500_inventory_purchasing_read_comments` (#142) ya corrige los tres comentarios, pero
-  **no se aplicó en dev**: falta el respaldo verificable (§19.6). Dueño: inventario. Accion: aplicar
-  con el protocolo completo en la próxima sesión.
+- **P3 · comentarios «manage-only» desactualizados en la BD (PR #131)** — **cerrado**: la migración
+  `20261126001500_inventory_purchasing_read_comments` (#142) se aplicó a dev con el protocolo §19.6 y los
+  tres comentarios ya describen `catalog.read`.
 - **P3 · `INVALID_SCOPE` sigue en la ruta de revocación** (`sync-merge-executor.ts`): un cliente que
   envíe el scope de otro tenant recibe `AUTH_REVOKED` y pierde el scope entero en lugar de un rechazo
   por evento. Dueño: sync. Accion: emitir `INVALID_SCOPE` propio y decidir si es terminal por evento.

@@ -192,8 +192,8 @@
   ],
   "decisions": [
     {
-      "h": "20261126001500 sin aplicar en dev",
-      "p": "La migracion de comentarios de compras esta validada en CI pero no se aplico: esta maquina no tiene pg_dump ni Docker en marcha, y 19.6 exige respaldo verificable. No se toco el historial ni se edito una migracion aplicada."
+      "h": "20261126001500 aplicada en dev",
+      "p": "Con Docker arriba se hizo el protocolo completo: sonda rollback-only (3 sentencias), respaldo schema-only verificado (1 391 471 bytes, 130 tablas), dry-run exacto, apply unico, postcheck upToDate y segundo dry-run upToDate. Los tres comentarios de compras ya dicen catalog.read en la base."
     },
     {
       "h": "El sello de una revocacion dura lo que la replica",
