@@ -1,6 +1,6 @@
 # Estado del loop
 
-Actualizado: 2026-11-27 (Ola 5: M2 cerrado en su alcance técnico, `o0-device-registry` fusionado)
+Actualizado: 2026-11-27 (Ola 6, primer corte: compras legibles con la matriz RBAC compartida, M4 documental y dos P3 cerradas)
 
 - **M1:** cerrado. **M2: cerrado en su alcance técnico.** `o0-purge-wire`, `o0-leader-wire` y
   `o0-device-registry` están fusionados y probados (#138, #147, #148). Las **puertas humanas** siguen
@@ -50,6 +50,30 @@ Actualizado: 2026-11-27 (Ola 5: M2 cerrado en su alcance técnico, `o0-device-re
   - Puertas: `verify:inventory-schema:rollback` 92 migraciones `ok`; flujo HTTP de inventario con
     `device_registry_isolation` en verde; movimientos 20/20, compras 27/27; pase visual de inventario
     **12/12** (1366×800 y 390×844, consola y red limpias); web test/lint/typecheck/build en 0.
-- **Siguiente ola:** `o5-compras-ui-read` (C) y después la Ola 6 (M4: `m4-metrics-catalog` +
-  `m4-adr-014-exports`). La prueba del operador sigue pendiente: no muevas filas de «Día operable» a DONE.
-  Plan: `docs/plans/plan-2026-11-27-ola5-m2-m4.md`.
+- **Ola 6, primer corte (fusionado en `main`):**
+  - `o5-rbac-matrix-shared` **DONE** (#152): `RBAC_ROLE_PERMISSIONS_V1` y `rolesGrantPermission` viven en
+    `packages/shared-types`; `apps/api/src/auth/rbac-policy.ts` los reexporta y sus once importadores no
+    cambian. shared-types 49/49 con la prueba nueva de `catalog.read`/`catalog.manage` y entradas hostiles.
+  - `o5-compras-ui-read` **REVIEW** (#152): `inventory-access.ts` (`canReadPurchases`/`canManagePurchases`)
+    sobre la matriz compartida; el panel carga con `canRead` y deja «Nuevo proveedor», «Nueva orden»,
+    editar/activar y «Recibir» detrás de `canManage` (la recepción sigue exigiendo `deviceStatus === "ready"`).
+    Pase visual de inventario **12/12** (3.1 min, 1366×800 y 390×844). **Falta la variante `viewer`/`auditor`
+    en navegador**: no hay cuenta web con ese rol en desarrollo, y el plan prohíbe declararlo DONE sin verla.
+  - `m4-metrics-catalog` **DONE** (#151): `docs/architecture/metrics-catalog.md` con 15 métricas (8
+    implementadas, 4 parciales, 3 inexistentes), fuente autoritativa por fila, zona horaria, dueño y estado,
+    más cinco huecos con id `sql-*` para la Ola 7 y las comprobaciones de reconciliación.
+  - `m4-adr-014-exports` **DONE** (#151): `docs/adr/ADR-014.md` — CSV propio sin dependencias, XLSX con
+    `exceljs` y PDF con `pdfkit`, streaming del servidor y límites de 31 días / 50 000 filas / 20 MB.
+  - `o5-p3-invalid-scope` **DONE** (#153): `INVALID_SCOPE` tiene código propio y es rechazo terminal del
+    evento; el scope sigue activo y ningún pago pendiente va a revisión manual.
+  - `o5-p3-capture-args` **DONE** (#154): `parseCaptureVerificationMode` exige `--local-disposable-only` o
+    `--remote-only` y falla cerrado antes de leer configuración o conectar; el runbook quedó corregido.
+  - **Revisiones cruzadas:** codex aprobó el diff de compras y encontró un **P1 real** en el comando del
+    runbook de capture (posición de `argv` en `node -e`), corregido y verificado en la misma rama; gemini
+    aprobó el diff del sync con un P3 (falta prueba de `execute()` con scope mal formado) que va a deuda.
+  - **Preflight:** al abrir y al cerrar, `lastRemote=20261126001500` sin candidatas (solo la excluida
+    `20260908000100`); no hubo respaldo, sonda ni apply porque ningún PR toca migraciones.
+- **Siguiente ola:** la pasada con una cuenta `viewer`/`auditor` para cerrar `o5-compras-ui-read`, y la
+  implementación de exportaciones que define ADR-014 (con el catálogo de métricas como contrato). La prueba
+  del operador sigue pendiente: no muevas filas de «Día operable» a DONE.
+  Plan: `docs/plans/plan-2026-11-27-ola6-compras-m4.md`.

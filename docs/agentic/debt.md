@@ -44,9 +44,12 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
 - **P3 · comentarios «manage-only» desactualizados en la BD (PR #131)** — **cerrado**: la migración
   `20261126001500_inventory_purchasing_read_comments` (#142) se aplicó a dev con el protocolo §19.6 y los
   tres comentarios ya describen `catalog.read`.
-- **P3 · `INVALID_SCOPE` sigue en la ruta de revocación** (`sync-merge-executor.ts`): un cliente que
-  envíe el scope de otro tenant recibe `AUTH_REVOKED` y pierde el scope entero en lugar de un rechazo
-  por evento. Dueño: sync. Accion: emitir `INVALID_SCOPE` propio y decidir si es terminal por evento.
+- **P3 · `INVALID_SCOPE` sigue en la ruta de revocación** — **cerrado** en #153: `classifyRejection` le da
+  su propio código y, al no estar en `SYNC_REVOCATION_CODES` ni en `SYNC_RECOVERABLE_REJECTION_CODES`, el
+  motor lo aplica como rechazo terminal del evento con el scope activo. Prueba de los cinco códigos.
+- **P3 · falta prueba de `SyncMergeExecutor.execute()` con un scope mal formado** (revisión de #153) — la
+  prueba cubre `classifyRejection` en unidad, no el camino completo del ejecutor. Dueño: sync. Acción:
+  ejecutor con doble de base y evento con `restaurantId` inválido, esperando `rejected` + `INVALID_SCOPE`.
 - **P3 · `correlationId` por evento, no por petición de push** — cada ejecución genera un `randomUUID`
   propio; sirve para trazar evento a evento pero no agrupa el batch. Dueño: sync. Accion: propagar el
   id de la petición y conservar el del evento en el detalle.
@@ -76,14 +79,17 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   añadir los casos limite que faltan (44×43, 43×44, inset en `rem`, `::after`, control `static`).
 
 ### Offline, dispositivos y configuracion
-- **P2 · la pestaña Compras queda vacia para `viewer`/`auditor` (PR #131)** — los `useEffect` de
-  `apps/web/src/app/app/inventario/purchasing-panel.tsx:113,138,163` no cargan sin `canManage`, aunque
-  la API ya permite leer. Dueño: UI inventario. Accion: cargar con `catalog.read` y ocultar solo las
-  acciones de escritura.
-- **P2 · `verify:capture-schema:rollback` cae en modo remoto con argumentos extra** — compara la cadena
-  exacta de `argv` (`run-capture-schema-verification.ts:15`); cualquier argumento adicional ejecuta
-  `verifyRemote()` en vez de rechazar. Dueño: verificadores. Accion: exigir exactamente
-  `--local-disposable-only` o `--remote-only` y fallar cerrado.
+- **P2 · la pestaña Compras queda vacia para `viewer`/`auditor` (PR #131)** — **cerrado** en #152: los
+  `useEffect` cargan con `canRead` (`catalog.read` vía la matriz de `shared-types`) y solo las acciones de
+  escritura siguen detrás de `catalog.manage`. Falta la pasada visual con una cuenta viewer/auditor.
+- **P2 · `verify:capture-schema:rollback` cae en modo remoto con argumentos extra** — **cerrado** en #154:
+  `parseCaptureVerificationMode` acepta exactamente `--local-disposable-only` o `--remote-only` y rechaza
+  el resto antes de leer configuración o conectar; la revisión de codex encontró un P1 en el comando del
+  runbook (`argv` de `node -e`) y se corrigió en la misma rama.
+- **P3 · el pase visual de inventario escribe siempre en `visual-verify-2026-11-26`** —
+  `apps/web/e2e/visual/inventario.spec.ts:12` fija la carpeta, así que una corrida nueva sobrescribe las
+  capturas de la anterior y no se distingue evidencia. Dueño: pruebas. Acción: carpeta por fecha de
+  corrida (`visual-verify-<hoy>`) como ya hace la spec de KDS offline.
 - **P3 · `CUSTOMER_ADAPTER_VERIFICATION` tambien se lee en modo local** (corrida no hermética) y
   `docs/architecture/P2_MULTICHANNEL_CAPTURE_SLICE.md:7` sigue documentando el verificador como remoto.
   Dueño: verificadores. Accion: ignorar la variable en local y actualizar el doc.
