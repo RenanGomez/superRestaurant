@@ -1,11 +1,11 @@
 # Estado del loop
 
-Actualizado: 2026-11-26 (Ola 5, segundo corte: rechazos recuperables del sync y `lastRemote=20261126001500`)
+Actualizado: 2026-11-27 (Ola 5: M2 cerrado en su alcance técnico, `o0-device-registry` fusionado)
 
-- **M1:** cerrado. **M2:** cerrado formalmente, **sin declarar al 100 %**: `o0-purge-wire` y `o0-leader-wire`
-  están fusionados y probados (#138), pero falta `o0-device-registry` (validar el `deviceId` de inventario
-  contra `app.sync_devices`). Puertas humanas (dispositivo real, impresora, capturas) siguen abiertas en
-  `docs/agentic/m2-offline-signoff.md`.
+- **M1:** cerrado. **M2: cerrado en su alcance técnico.** `o0-purge-wire`, `o0-leader-wire` y
+  `o0-device-registry` están fusionados y probados (#138, #147, #148). Las **puertas humanas** siguen
+  abiertas en `docs/agentic/m2-offline-signoff.md`: dispositivo real (mobile/KDS), impresora Bluetooth,
+  ratificación del ASAP 15/30 min y la prueba única del operador.
 - **M3 inventario: 100 % del alcance fusionado.** `lastRemote=20261126001400`; el preflight del 2026-11-26
   no encontró candidatas (solo la excluida `20260908000100`).
 - **Ola 5, primer corte (fusionado en `main` `85f781e0`):**
@@ -40,6 +40,16 @@ Actualizado: 2026-11-26 (Ola 5, segundo corte: rechazos recuperables del sync y 
     aceptar el anuncio accesible del shell (#145).
   - Servidores locales levantados con `SYNC_CURSOR_SECRET` efímero (sin él la API no arranca); la sesión
     de Playwright sigue caducada y falta el login manual.
-- **Siguiente ola:** `o0-device-registry` (A) con la decisión ya tomada (**derivar el `deviceId` de
-  inventario por actor**, registrarlo antes de escribir y validarlo); `o5-compras-ui-read` (C) con sesión
-  de Playwright viva. Plan: `docs/plans/plan-2026-11-27-ola5-m2-m4.md`.
+- **Ola 5, tercer corte (fusionado en `main` `19aed6b9`):**
+  - `o0-device-registry` **DONE** (#147): el id de inventario se deriva **por actor** (mismo hash que el
+    sync), el panel registra el equipo antes de escribir y el API lo valida con
+    `app_private.sync_device_state` en movimientos y recepción (`403 INVENTORY_DEVICE_REJECTED`).
+  - #148 corrige lo que encontró el pase visual: el `fetch` del registro dejaba la respuesta sin leer y la
+    petición abierta (bloqueaba `networkidle`); ahora consume el cuerpo, aborta a los 8 s y la UI
+    distingue pendiente/rechazado.
+  - Puertas: `verify:inventory-schema:rollback` 92 migraciones `ok`; flujo HTTP de inventario con
+    `device_registry_isolation` en verde; movimientos 20/20, compras 27/27; pase visual de inventario
+    **12/12** (1366×800 y 390×844, consola y red limpias); web test/lint/typecheck/build en 0.
+- **Siguiente ola:** `o5-compras-ui-read` (C) y después la Ola 6 (M4: `m4-metrics-catalog` +
+  `m4-adr-014-exports`). La prueba del operador sigue pendiente: no muevas filas de «Día operable» a DONE.
+  Plan: `docs/plans/plan-2026-11-27-ola5-m2-m4.md`.

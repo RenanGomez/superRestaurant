@@ -13,11 +13,11 @@ ARRANQUE (no leas archivos de más de 300 líneas)
    `docs/agentic/status.md` y `docs/agentic/backlog.json` (solo items que no estén `done`).
 2. Verifica con `git log --oneline -5`, `git status` y `gh pr list --state open`.
 
-Estado esperado: `main` en `85fdfa23` o posterior; Ola 5 con `o0-purge-wire` (P1), `o0-leader-wire` (P2),
-`o5-visual-spec-fix`, `o5-sync-rejection-map` y `o5-func-comments` fusionados (#138–#142) y dev en
-`20261126001500`. M3 al 100 % del alcance fusionado; **M2 NO declarado al 100 %** por
-`o0-device-registry` únicamente. La prueba del operador sigue pendiente: no muevas filas de «Día
-operable» a DONE.
+Estado esperado: `main` en `19aed6b9` o posterior; Ola 5 con `o0-purge-wire`, `o0-leader-wire`,
+`o5-visual-spec-fix`, `o5-sync-rejection-map`, `o5-func-comments` y `o0-device-registry` fusionados
+(#138–#148) y dev en `20261126001500`. M3 al 100 % del alcance fusionado; **M2 cerrado en su alcance
+técnico**, con las puertas humanas (dispositivo real, impresora, ASAP 15/30) y la prueba del operador
+pendientes: no muevas filas de «Día operable» a DONE.
 
 PASO 0 OBLIGATORIO — PREFLIGHT READ_ONLY
 
@@ -47,17 +47,13 @@ OLA 5 — CERRAR M2, en este orden (detalle y criterios en el plan §1)
    cuota, páusala sobre `web-sync-bridge.ts`, `sync-store.ts`, `sync-leader.ts`,
    `runtime-sync-runner.ts` y `sync-merge-executor.ts` (el corte se auto-revisó sin motor independiente,
    ver HANDOFF).
-1. ~~Aplicar `20261126001500_inventory_purchasing_read_comments`~~ — **hecho**: aplicada a dev con §19.6
-   (`lastRemote=20261126001500`, postcheck y segundo dry-run `upToDate`, comentarios verificados). Si el
-   preflight de arranque muestra una candidata nueva, aplícala con el protocolo completo.
-2. **`o0-device-registry`** (dsh, A, **decisión ya tomada: opción 1**): derivar el `deviceId` de
-   inventario por actor (como `syncDeviceIdForActor`), registrarlo antes de escribir y validarlo con
-   `app_private.sync_device_state` en movimientos y recepción; prueba de rechazo de dispositivo ajeno y
-   documentación del cambio de identidad.
+1. ~~Aplicar `20261126001500_inventory_purchasing_read_comments`~~ — **hecho** (dev en `20261126001500`).
+2. ~~`o0-device-registry`~~ — **hecho** (#147/#148): id derivado por actor, registro previo con timeout y
+   validación `sync_device_state` en movimientos y recepción. M2 cerrado en su alcance técnico.
 3. **`o5-compras-ui-read`** (dsh, C): panel de compras legible con `catalog.read` (ocultando solo
-   escrituras) y su verificación en navegador real (necesita la sesión de Playwright renovada).
-4. **Cierre** (tú, D): HANDOFF, `status.md`, `backlog.json`, `debt.md` y smoke; declarar M2 al 100 % solo
-   si `o0-device-registry` está verde y `o5-func-comments` está aplicada. Después, Ola 6 (M4):
+   escrituras) y su verificación en navegador real (la sesión de Playwright ya se renovó una vez; si
+   caducó, `pnpm --filter @super-restaurant/web e2e:auth`).
+4. **Cierre** (tú, D): HANDOFF, `status.md`, `backlog.json`, `debt.md` y smoke. Después, Ola 6 (M4):
    `m4-metrics-catalog` + `m4-adr-014-exports` (§2 del plan).
 
 Reglas no negociables
