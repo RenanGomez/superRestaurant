@@ -464,11 +464,19 @@ export async function openWebSyncBridge(options: WebSyncBridgeOpenOptions): Prom
           }
         }
         const result = await engine.sync(scope);
+        const deviceUnknown = result.push.events.some((event) => event.code === "DEVICE_UNKNOWN");
+        if (deviceUnknown) {
+          // The server does not know this device for the actor: the row was pruned or belongs
+          // to another actor. Forget the cached registration so the next sync registers again
+          // before pushing; the events stay pending and retry with the same idempotency key.
+          registeredScopes.delete(scopeKey(scope));
+        }
         if (result.push.revoked || result.pull.status === "revoked") {
           connectivityRef.current = "sync_blocked";
           await sealAfterRevocation(scope);
         } else if (
-          result.push.failureCode !== null
+          deviceUnknown
+          || result.push.failureCode !== null
           || result.pull.status === "failed"
           || result.pull.status === "resync_required"
         ) {

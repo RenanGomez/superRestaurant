@@ -99,7 +99,7 @@ test("los SQLSTATE de la función se mapean a códigos estables", async () => {
   );
 });
 
-test("tras registrar, el ejecutor deja de rechazar el dispositivo como DEVICE_REVOKED", async () => {
+test("tras registrar, el ejecutor deja de rechazar el dispositivo como DEVICE_UNKNOWN", async () => {
   const registered = new Set<string>();
   const database: TransactionalDatabaseClientPort = {
     query: async () => { throw new Error("unexpected pool query"); },
@@ -129,7 +129,7 @@ test("tras registrar, el ejecutor deja de rechazar el dispositivo como DEVICE_RE
     occurredAt: "2026-11-23T00:00:00.000Z", receivedAt: null, payload: { amountMinor: 1 }, retryCount: 0, localState: "pending",
   });
   assert.ok(event);
-  assert.equal((await executor.execute("token", event))?.code, "DEVICE_REVOKED");
+  assert.equal((await executor.execute("token", event))?.code, "DEVICE_UNKNOWN");
 
   const service = new SyncDeviceService(database);
   assert.deepEqual(await service.register(actor, body), { status: "active" });

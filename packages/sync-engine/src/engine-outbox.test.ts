@@ -339,6 +339,27 @@ test("un resultado AUTH_REVOKED del servidor revoca el scope y lleva el pago a m
   await expectCode(engine.enqueue(orderInput(SCOPE_A1, "auth-new")), "SCOPE_REVOKED");
 });
 
+test("DEVICE_UNKNOWN y ACTOR_MISMATCH no revocan: el evento se reintenta y el pago no va a revision", async () => {
+  const { engine, server } = rig();
+  const payment = await engine.enqueue({ ...orderInput(SCOPE_A1, "unknown-pay"), entityType: "Payment" });
+  const order = await engine.enqueue(orderInput(SCOPE_A1, "mismatch-order"));
+  server.pushCodeOverride.set(payment.eventId, { status: "rejected", code: "DEVICE_UNKNOWN" });
+  server.pushCodeOverride.set(order.eventId, { status: "rejected", code: "ACTOR_MISMATCH" });
+  const outcome = await engine.push(SCOPE_A1);
+  assert.equal(outcome.revoked, false, "a recoverable rejection is not a credential revocation");
+  const entries = await engine.getOutbox(SCOPE_A1);
+  // Retryable with backoff: same evidence, no terminal rejection, no manual review.
+  assert.deepEqual(entries.map((entry) => entry.localState), ["retry_wait", "retry_wait"]);
+  assert.deepEqual(entries.map((entry) => entry.lastErrorCode), ["DEVICE_UNKNOWN", "ACTOR_MISMATCH"]);
+  assert.equal(entries[0]?.idempotencyKey, "unknown-pay");
+  assert.equal((await engine.getStatusSummary(SCOPE_A1)).scopeStatus, "active");
+  // The device can register and retry the same key instead of losing the operation.
+  await engine.enqueue(orderInput(SCOPE_A1, "after-recoverable"));
+  server.pushCodeOverride.clear();
+  const retried = await engine.push(SCOPE_A1);
+  assert.equal(retried.revoked, false);
+});
+
 test("conflict bloquea los eventos posteriores de la misma entidad y una resolucion los libera", async () => {
   const { engine, server } = rig({ maxBatchSize: 1 });
   const entityX = id(0x7001);
