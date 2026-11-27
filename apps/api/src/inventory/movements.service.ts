@@ -16,6 +16,7 @@ import {
   type DatabaseQueryResult,
   type TransactionalDatabaseClientPort,
 } from "../database.js";
+import { isRegisteredInventoryDevice } from "./device-authorization.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const MANUAL_KINDS: ReadonlySet<InventoryMovementKindV1> = new Set([
@@ -36,7 +37,7 @@ const listMovementsSql =
 const listBalancesSql =
   "select * from app_private.list_inventory_balances($1::uuid,$2::uuid,$3::uuid,$4::uuid)";
 
-export type InventoryMovementApplicationErrorCode = "request" | "authorization" | "conflict" | "unavailable";
+export type InventoryMovementApplicationErrorCode = "request" | "authorization" | "device" | "conflict" | "unavailable";
 
 export class InventoryMovementApplicationError extends Error {
   public constructor(public readonly code: InventoryMovementApplicationErrorCode) {
@@ -90,6 +91,12 @@ export class MovementsService {
     if (deviceId !== undefined && device === undefined) throw requestError();
 
     await this.authorize(principal, command.restaurantId, command.branchId, "catalog.manage");
+    if (device !== undefined && !(await isRegisteredInventoryDevice(this.database, {
+      actorId: principal.actorId,
+      restaurantId: command.restaurantId,
+      branchId: command.branchId,
+      deviceId: device,
+    }))) throw new InventoryMovementApplicationError("device");
 
     if (TRANSFER_KINDS.has(command.kind)) return this.recordTransfer(principal, command, device);
     return this.recordManual(principal, command, device);

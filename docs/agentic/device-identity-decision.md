@@ -1,34 +1,37 @@
 # Identidad de dispositivo en inventario
 
-## Decisión
+## Decisión (actualizada 2026-11-26, `o0-device-registry`)
 
-1. El `deviceId` de la UI de compras/inventario persiste por **perfil de navegador**
-   (`localStorage`, clave `super-restaurant.inventory.deviceId`), no por pestaña ni por sesión.
-   Antes vivía en `sessionStorage` y rotaba en cada pestaña.
-2. El servidor **no autoriza** por `deviceId`: el actor sale de la sesión y de las reglas RBAC.
-   El identificador se guarda como traza de auditoría y no puede ampliar permisos ni alcance de
-   sucursal.
-3. `ensureInventoryDeviceId` solo acepta un UUID canónico; un valor corrupto se reemplaza y un
-   almacenamiento bloqueado no rompe el montaje (devuelve el id generado para ese montaje).
+1. El perfil de navegador conserva **una** identidad estable (`localStorage`, clave
+   `super-restaurant.inventory.deviceId`). `ensureInventoryDeviceId` solo acepta un UUID canónico,
+   reemplaza un valor corrupto y no rompe el montaje con un almacenamiento bloqueado.
+2. El id que **viaja al API se deriva por actor**: `deviceIdForActor(perfil, actorId)` con el mismo
+   hash que usa el puente de sync (`syncDeviceIdForActor`). Así una tablet compartida tiene una fila
+   por cajero en `app.sync_devices` en vez de una fila del primer actor que la registró.
+3. El panel **registra el equipo antes de escribir** (`POST /api/sync/devices` con
+   `{deviceId, scope}`) y no habilita movimientos ni recepción hasta que el servidor lo confirma.
+4. El servidor **valida** el `deviceId` contra `app_private.sync_device_state` en movimientos y
+   recepción de compras: un dispositivo `unknown` o `revoked` se rechaza con
+   `403 INVENTORY_DEVICE_REJECTED` y sin efectos. Sigue sin ser una autorización: el actor sale de la
+   sesión y RBAC decide; es defensa en profundidad sobre la traza de auditoría.
 
 ## Cómo viaja el identificador
 
-- **Recepción de compras:** va en el **cuerpo** del comando (`purchasing-panel.tsx` → `actions.ts`)
-  y se persiste como `received_device_id` y `device_id` en el ledger.
-- **Movimientos de inventario:** va en la cabecera `x-device-id` (`movements.controller.ts`), validada
-  como UUID.
-- Ninguno de los dos caminos lo usa para autorizar.
-
-## Qué existe ya para validarlo
-
-`app_private.sync_device_state(restaurant_id, branch_id, device_id, actor_id)` ya responde si un
-dispositivo está `active`, `revoked` o `unknown` para un actor, y tiene
-`grant execute … to app_api` (`20261123000400_sync_api_boundary.sql`). **No hace falta una migración
-nueva**: falta cablearla en las escrituras de inventario y que el equipo esté registrado (hoy
-devolvería `unknown`). Eso es `o0-device-registry` (nivel B).
+- **Recepción de compras:** en el **cuerpo** del comando (`purchasing-panel.tsx` → `actions.ts`) y se
+  persiste como `received_device_id` y `device_id` en el ledger.
+- **Movimientos de inventario:** en la cabecera `x-device-id` (`movements.controller.ts`); el panel lo
+  envía y `actions.ts` lo coloca en la cabecera tras validarlo como UUID.
+- Ausente: la traza sigue siendo opcional en el contrato (clientes antiguos). Un id **presente pero
+  ajeno** nunca se acepta.
 
 ## Qué NO garantiza
 
-No prueba que el equipo sea legítimo ni impide reutilizar un id copiado mientras no se cablee esa
-validación; no sustituye autenticación, RBAC ni aislamiento por restaurante/sucursal. Tampoco hay hoy
-prueba de rechazo de dispositivo ajeno porque esa validación todavía no se ejecuta.
+No prueba que el equipo sea legítimo ni impide copiar un id mientras el actor siga autenticado; no
+sustituye autenticación, RBAC ni aislamiento por restaurante/sucursal. La historia ya registrada con
+ids de perfil (antes de este cambio) se conserva como traza histórica: no se reescribe.
+
+## Riesgo operativo
+
+Si la sesión cambia de actor, el id derivado cambia y la UI registra de nuevo el equipo; el anterior
+queda inactivo por uso, no revocado. Una revocación real del dispositivo (`revoked_at`) hace que el
+servidor rechace las escrituras hasta que un supervisor lo re-registre o desbloquee.

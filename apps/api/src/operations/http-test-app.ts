@@ -19,7 +19,13 @@ export interface HttpTestApp {
   readonly baseUrl: string;
   close(): Promise<void>;
   /** JSON request with a Bearer token; returns the status and parsed body (null when empty). */
-  request(token: string | null, method: "GET" | "POST" | "PUT" | "PATCH", path: string, body?: unknown): Promise<{ readonly body: unknown; readonly status: number }>;
+  request(
+    token: string | null,
+    method: "GET" | "POST" | "PUT" | "PATCH",
+    path: string,
+    body?: unknown,
+    headers?: Readonly<Record<string, string>>,
+  ): Promise<{ readonly body: unknown; readonly status: number }>;
 }
 
 /**
@@ -88,10 +94,10 @@ export async function bootstrapHttpApp(appApiUrl: string, principals: ReadonlyMa
       await app.close();
       await pool.end();
     },
-    async request(token, method, path, body) {
+    async request(token, method, path, body, headers) {
       const response = await fetch(`${baseUrl}${path}`, {
         method,
-        headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(token === null ? {} : { authorization: `Bearer ${token}` }) },
+        headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(token === null ? {} : { authorization: `Bearer ${token}` }), ...(headers ?? {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       const text = await response.text();

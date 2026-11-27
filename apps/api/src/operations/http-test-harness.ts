@@ -17,7 +17,7 @@ export interface HttpFlowContext {
   readonly foreignScope: { restaurantId: string; branchId: string };
   readonly query: (parameters: Record<string, string>) => string;
   readonly scope: { restaurantId: string; branchId: string };
-  send(actor: HttpTestActorName | null, method: HttpMethod, path: string, body?: unknown): Promise<{ status: number; body: Json }>;
+  send(actor: HttpTestActorName | null, method: HttpMethod, path: string, body?: unknown, headers?: Readonly<Record<string, string>>): Promise<{ status: number; body: Json }>;
 }
 
 /**
@@ -49,8 +49,8 @@ export async function runHttpFlow(
       foreignScope: { restaurantId: fixtures.restaurantB, branchId: fixtures.branchB },
       query: (parameters) => `?${new URLSearchParams(parameters).toString()}`,
       scope: { restaurantId: fixtures.restaurantA, branchId: fixtures.branchA },
-      send: async (actor, method, path, payload) => {
-        const response = await http.request(actor === null ? null : fixtures.tokens[actor], method, path, payload);
+      send: async (actor, method, path, payload, headers) => {
+        const response = await http.request(actor === null ? null : fixtures.tokens[actor], method, path, payload, headers);
         return { status: response.status, body: (response.body ?? {}) as Json };
       },
     });

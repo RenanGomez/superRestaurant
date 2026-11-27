@@ -8,7 +8,7 @@ import {
   findMembership,
   parseBranchPreference,
 } from "../../../lib/memberships";
-import { getRequestAuthorizedBranch, getRequestMemberships, getRequestSession } from "../../../lib/request-context";
+import { getRequestAuthorizedBranch, getRequestMemberships, getRequestSession, getRequestUser } from "../../../lib/request-context";
 import { inventoryAction } from "./actions";
 import { InventoryWorkspace } from "./inventory-workspace";
 
@@ -38,6 +38,9 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
   const tabParam = typeof params.tab === "string" ? params.tab : undefined;
   const initialTab = parseInventoryTab(tabParam) ?? DEFAULT_INVENTORY_TAB;
   const canManage = membership.roles.some((role) => MANAGE_ROLES.has(role));
+  // The inventory device id is derived per `(browser profile, actor)`; the client needs the actor
+  // that the API will see so the registered device row matches the session exactly.
+  const actorId = (await getRequestUser())?.id ?? "";
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">
@@ -48,7 +51,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
           {membership.branchName} · insumos y almacenes de esta sucursal
         </p>
       </header>
-      <InventoryWorkspace action={inventoryAction} canManage={canManage} initialTab={initialTab} />
+      <InventoryWorkspace action={inventoryAction} actorId={actorId} canManage={canManage} initialTab={initialTab} scope={scope} />
     </div>
   );
 }

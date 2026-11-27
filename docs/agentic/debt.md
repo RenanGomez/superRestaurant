@@ -87,13 +87,9 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
 - **P3 · `CUSTOMER_ADAPTER_VERIFICATION` tambien se lee en modo local** (corrida no hermética) y
   `docs/architecture/P2_MULTICHANNEL_CAPTURE_SLICE.md:7` sigue documentando el verificador como remoto.
   Dueño: verificadores. Accion: ignorar la variable en local y actualizar el doc.
-- **P2 · identidad de dispositivo por equipo** — `debt-device-id` (Ola 4) la persiste por perfil de
-  navegador y documenta que el servidor autoriza por actor. **Hallazgo de la Ola 5:** validar el
-  `deviceId` de inventario contra `app.sync_devices` tal cual está hoy haría `unknown` a todo equipo
-  (el id de inventario no es el id derivado por actor que registra el puente de sync) y rechazaría a
-  todo equipo compartido. `o0-device-registry` exige primero derivarlo por actor y registrarlo antes de
-  escribir. Dueño: inventario/sync. Accion: decidir derivacion + registro y añadir la prueba de rechazo
-  de dispositivo ajeno.
+- **P3 · identidad de dispositivo: un id ajeno omitido no se detecta** — la traza es opcional en el
+  contrato, así que un cliente que no envíe `deviceId` no se valida. Dueño: inventario. Acción: si se
+  quiere cerrar del todo, exigir la cabecera/campo en la próxima revisión de contrato (rompe clientes).
 - **P2 · `SYNC_CURSOR_SECRET` de produccion** — rotarlo invalida cursores. Dueño: operacion.
   Accion: definirlo (>=32) antes de desplegar y documentar la rotacion en el runbook.
 - **P2 · `registerId = deviceId` en el cobro mobile** — no descubre ni permite elegir otra caja abierta
@@ -138,6 +134,9 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
 
 ## Archivada — sin impacto (2026-11-26)
 
+- **2026-11-26 · P2 identidad de dispositivo por equipo** — resuelto en `o0-device-registry`: el id de
+  inventario se deriva por actor (mismo hash que el sync), el panel lo registra antes de escribir y el
+  API valida `sync_device_state` en movimientos y recepción (`403 INVENTORY_DEVICE_REJECTED`).
 - **2026-11-26 · P2 `ACTOR_MISMATCH`/`DEVICE_UNKNOWN` emitidos como revocación** — resuelto en #141:
   cada causa viaja con su código (`SYNC_RECOVERABLE_REJECTION_CODES`), el motor la trata como reintento
   con backoff y el puente vuelve a registrar el equipo; los financieros pendientes ya no van a

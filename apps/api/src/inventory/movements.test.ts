@@ -139,6 +139,7 @@ class FakeDatabase implements TransactionalDatabaseClientPort {
 }
 
 function defaultHandler(sql: string): readonly unknown[] {
+  if (sql.includes("app_private.sync_device_state")) return [{ state: "active" }];
   if (sql.includes("app_private.inventory_transfer")) {
     return [{ result: { status: "recorded", transferPairId, movements: [transferOut, transferIn] } }];
   }
@@ -253,12 +254,32 @@ test("recordMovement: transfer_out moves from the requested warehouse to toWareh
   assert.equal(result.status, "recorded");
   assert.equal((result as InventoryTransferResultV1).transferPairId, transferPairId);
   assert.equal((result as InventoryTransferResultV1).movements.length, 2);
-  assert.equal(database.queries.length, 1);
-  assert.equal(database.queries[0]?.sql.includes("app_private.inventory_transfer"), true);
-  assert.deepEqual(database.queries[0]?.parameters, [
+  assert.equal(database.queries[0]?.sql.includes("app_private.sync_device_state"), true);
+  assert.deepEqual(database.queries[0]?.parameters, [restaurantId, branchId, "0a5dfef7-e2dd-4b66-845a-7e28d24a46ce", principal.actorId]);
+  const writes = database.queries.filter((query) => query.sql.includes("app_private.inventory_transfer"));
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0]?.parameters, [
     principal.actorId, restaurantId, branchId, warehouseId, otherWarehouseId, itemId, 5, "g",
     "Ajuste por conteo", "movement-transfer-1", "0a5dfef7-e2dd-4b66-845a-7e28d24a46ce",
   ]);
+});
+
+test("recordMovement: a device that is not registered for the actor is rejected before writing", async () => {
+  const handler: Handler = (sql) => (sql.includes("app_private.sync_device_state") ? [{ state: "unknown" }] : defaultHandler(sql));
+  const { service, database } = serviceFor({ handler });
+  await assert.rejects(
+    service.recordMovement(principal, { ...adjustment, idempotencyKey: "foreign-device" }, "0a5dfef7-e2dd-4b66-845a-7e28d24a46ce"),
+    code("device"),
+  );
+  assert.equal(database.queries.some((query) => query.sql.includes("inventory_record_manual_movement")), false);
+  assert.equal(database.queries.length, 1);
+});
+
+test("recordMovement: without a device id the audit trace stays optional and the write proceeds", async () => {
+  const { service, database } = serviceFor();
+  const result = await service.recordMovement(principal, adjustment, undefined);
+  assert.equal(result.status, "recorded");
+  assert.equal(database.queries.some((query) => query.sql.includes("sync_device_state")), false);
 });
 
 test("recordMovement: transfer_in normalizes toWarehouseId as the source warehouse", async () => {

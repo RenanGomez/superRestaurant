@@ -5,7 +5,6 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { Field } from "../../../components/field-hint";
 import {
-  ensureInventoryDeviceId,
   ensureInventoryIdempotencyKey,
   formatInventoryNumber,
   formatInventoryTimestamp,
@@ -71,6 +70,10 @@ type DialogState =
 interface PurchasingPanelProps {
   readonly action: (operation: InventoryOperation, input?: unknown) => Promise<InventoryActionResult>;
   readonly canManage: boolean;
+  /** Derived per-actor id; the API rejects receipts from a device it does not know. */
+  readonly deviceId: string;
+  /** True only after the device is registered for this actor and branch. */
+  readonly deviceReady: boolean;
   readonly items: readonly InventoryItemV1[];
   readonly itemsStatus: LoadStatus;
   readonly warehouses: readonly InventoryWarehouseV1[];
@@ -81,6 +84,8 @@ interface PurchasingPanelProps {
 export function PurchasingPanel({
   action,
   canManage,
+  deviceId,
+  deviceReady,
   items,
   itemsStatus,
   warehouses,
@@ -106,7 +111,6 @@ export function PurchasingPanel({
   const [notice, setNotice] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [timeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
-  const deviceId = useDeviceId();
 
   useEffect(() => {
     if (!canManage) {
@@ -192,7 +196,7 @@ export function PurchasingPanel({
   const activeSuppliers = suppliers?.filter((supplier) => supplier.active) ?? [];
   const catalogReady = itemsStatus === "ready" && items.length > 0
     && suppliers !== undefined && activeSuppliers.length > 0;
-  const receiveReady = warehousesStatus === "ready" && warehouses.length > 0 && deviceId !== "";
+  const receiveReady = deviceReady && warehousesStatus === "ready" && warehouses.length > 0 && deviceId !== "";
 
   function supplierSaved(saved: SupplierV1): void {
     setSuppliers((current) => {
@@ -418,20 +422,6 @@ export function PurchasingPanel({
       )}
     </div>
   );
-}
-
-function useDeviceId(): string {
-  const [deviceId, setDeviceId] = useState("");
-  useEffect(() => {
-    let store: Storage | undefined;
-    try {
-      store = window.localStorage;
-    } catch {
-      store = undefined;
-    }
-    setDeviceId(ensureInventoryDeviceId(store, () => crypto.randomUUID()));
-  }, []);
-  return deviceId;
 }
 
 function SupplierRow({ supplier, canManage, busy, onEdit, onToggle }: {

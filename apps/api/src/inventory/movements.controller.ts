@@ -71,6 +71,7 @@ export class MovementsController {
       if (error instanceof InventoryMovementApplicationError) {
         if (error.code === "request") throw new BadRequestException({ code: "INVENTORY_REQUEST_INVALID" });
         if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
+        if (error.code === "device") throw new ForbiddenException({ code: "INVENTORY_DEVICE_REJECTED" });
         if (error.code === "conflict") throw new ConflictException({ code: "INVENTORY_CONFLICT" });
       }
       throw new ServiceUnavailableException({ code: "INVENTORY_UNAVAILABLE" });

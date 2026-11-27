@@ -1,6 +1,6 @@
 "use client";
 
-import type { InventoryItemV1, InventoryWarehouseV1 } from "@super-restaurant/shared-types";
+import type { BranchScope, InventoryItemV1, InventoryWarehouseV1 } from "@super-restaurant/shared-types";
 import { INVENTORY_UNITS } from "@super-restaurant/shared-types";
 import {
   useEffect,
@@ -31,6 +31,7 @@ import { InventoryModal } from "./inventory-modal";
 import { MovementsPanel } from "./movements-panel";
 import { PurchasingPanel } from "./purchasing-panel";
 import { RecipesPanel } from "./recipes-panel";
+import { useInventoryDevice } from "./use-inventory-device";
 import type { InventoryActionResult, InventoryError, InventoryOperation } from "./actions";
 
 const panelClass = "rounded-xl border border-border bg-surface p-4 sm:p-5";
@@ -69,11 +70,14 @@ type DialogState =
 
 interface InventoryWorkspaceProps {
   readonly action: (operation: InventoryOperation, input?: unknown) => Promise<InventoryActionResult>;
+  readonly actorId: string;
   readonly canManage: boolean;
   readonly initialTab: InventoryTab;
+  readonly scope: BranchScope;
 }
 
-export function InventoryWorkspace({ action, canManage, initialTab }: InventoryWorkspaceProps): ReactNode {
+export function InventoryWorkspace({ action, actorId, canManage, initialTab, scope }: InventoryWorkspaceProps): ReactNode {
+  const device = useInventoryDevice(actorId, scope);
   const [activeTab, setActiveTab] = useState<InventoryTab>(initialTab);
   const [items, setItems] = useState<LoadState<readonly InventoryItemV1[]>>({ status: "idle" });
   const [warehouses, setWarehouses] = useState<LoadState<readonly InventoryWarehouseV1[]>>({ status: "idle" });
@@ -346,6 +350,8 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
           <MovementsPanel
             action={action}
             canManage={canManage}
+            deviceId={device.deviceId}
+            deviceReady={device.ready}
             items={items.status === "ready" ? items.value : []}
             warehouses={warehouses.status === "ready" ? warehouses.value : []}
             itemsStatus={items.status}
@@ -360,6 +366,8 @@ export function InventoryWorkspace({ action, canManage, initialTab }: InventoryW
           <PurchasingPanel
             action={action}
             canManage={canManage}
+            deviceId={device.deviceId}
+            deviceReady={device.ready}
             items={items.status === "ready" ? items.value : []}
             itemsStatus={items.status}
             warehouses={warehouses.status === "ready" ? warehouses.value : []}
