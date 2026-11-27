@@ -1824,12 +1824,12 @@
         "deuda P3 de UUID/ULID y correlationId resuelta o documentada"
       ],
       "etaMin": 30,
-      "attempts": 0,
-      "status": "todo",
+      "attempts": 1,
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 141,
       "parent": null,
-      "note": "P2 de o0-rev-sync-p3 (2026-11-26): hoy manda financieros a revision manual."
+      "note": "Resuelto en #141: codigos propios, reintento con backoff en el motor y re-registro en el puente."
     },
     {
       "id": "o5-func-comments",
@@ -1850,12 +1850,12 @@
         "invariantes verdes"
       ],
       "etaMin": 30,
-      "attempts": 0,
-      "status": "todo",
+      "attempts": 1,
+      "status": "review",
       "sessionId": null,
-      "pr": null,
+      "pr": 142,
       "parent": null,
-      "note": "Los comment de 20261126001400 siguen diciendo manage-only; no se edita una migracion aplicada."
+      "note": "Migracion 20261126001500 lista y validada en CI, SIN aplicar en dev: no hay pg_dump ni daemon de Docker para el respaldo de 19.6."
     },
     {
       "id": "o5-compras-ui-read",
