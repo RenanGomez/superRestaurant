@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { canManagePurchases, canReadPurchases } from "../../../lib/inventory-access";
 import { DEFAULT_INVENTORY_TAB, parseInventoryTab } from "../../../lib/inventory-ui";
 import {
   BRANCH_PREFERENCE_COOKIE,
@@ -13,8 +14,6 @@ import { inventoryAction } from "./actions";
 import { InventoryWorkspace } from "./inventory-workspace";
 
 export const dynamic = "force-dynamic";
-
-const MANAGE_ROLES = new Set(["owner", "admin", "manager"]);
 
 interface InventoryPageProps {
   readonly searchParams: Promise<Readonly<Record<string, string | readonly string[] | undefined>>>;
@@ -37,7 +36,8 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
   const params = await searchParams;
   const tabParam = typeof params.tab === "string" ? params.tab : undefined;
   const initialTab = parseInventoryTab(tabParam) ?? DEFAULT_INVENTORY_TAB;
-  const canManage = membership.roles.some((role) => MANAGE_ROLES.has(role));
+  const canRead = canReadPurchases(membership.roles);
+  const canManage = canManagePurchases(membership.roles);
   // The inventory device id is derived per `(browser profile, actor)`; the client needs the actor
   // that the API will see so the registered device row matches the session exactly.
   const actorId = (await getRequestUser())?.id ?? "";
@@ -51,7 +51,7 @@ export default async function InventoryPage({ searchParams }: InventoryPageProps
           {membership.branchName} · insumos y almacenes de esta sucursal
         </p>
       </header>
-      <InventoryWorkspace action={inventoryAction} actorId={actorId} canManage={canManage} initialTab={initialTab} scope={scope} />
+      <InventoryWorkspace action={inventoryAction} actorId={actorId} canManage={canManage} canRead={canRead} initialTab={initialTab} scope={scope} />
     </div>
   );
 }
