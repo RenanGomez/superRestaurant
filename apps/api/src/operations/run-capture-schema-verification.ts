@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+import { parseCaptureVerificationMode } from "./capture-schema-verification-mode.js";
 import { assertLocalConfirmation, listMigrationNames, LocalPostgres } from "./local-postgres.js";
 import { verifyCaptureSchema } from "./capture-schema-verification.js";
 import { verifyCustomerDirectoryAdapters } from "./customer-directory-adapter-verification.js";
 import { buildCustomerDirectoryCatalogAudit, buildPostBootstrapCatalogAudit, postBootstrapSummary } from "./post-bootstrap-catalog.js";
 import { extractMigrationBody, readSchemaVerificationConfig, SchemaVerificationError, type SchemaVerificationConfig } from "./schema-verification.js";
 
-// Historical Capture verifier. Without arguments it keeps the original remote rollback-only
-// behaviour; `--local-disposable-only` runs the exact candidate set from scratch on a brand-new
-// disposable local PostgreSQL 17 cluster (never Supabase, never a shared database).
+// Historical Capture verifier. The mode is mandatory and explicit: `--remote-only` keeps the
+// original remote rollback-only behaviour; `--local-disposable-only` runs the exact candidate set
+// from scratch on a brand-new disposable local PostgreSQL 17 cluster (never Supabase, never a
+// shared database). Anything else is rejected before reading configuration or connecting.
 const marker = "LOCAL_CAPTURE_SCHEMA_ONLY";
 const candidateName = "20260916000100_create_capture_drafts.sql";
-const localOnly = process.argv.slice(2).join(" ") === "--local-disposable-only";
+const mode = parseCaptureVerificationMode(process.argv.slice(2));
 
 function readVerificationInput(config: SchemaVerificationConfig) {
   const base = readFileSync(new URL("../../../../supabase/tests/tenancy_memberships_post_p2.sql", import.meta.url), "utf8");
@@ -101,5 +103,8 @@ async function verifyLocal(): Promise<void> {
   }
 }
 
-if (localOnly) await verifyLocal();
+if (mode === undefined) {
+  process.stderr.write(`${JSON.stringify({ code: "CAPTURE_VERIFICATION_ARGUMENTS_REJECTED", stage: "arguments", status: "failed" })}\n`);
+  process.exitCode = 1;
+} else if (mode === "local") await verifyLocal();
 else await verifyRemote();
