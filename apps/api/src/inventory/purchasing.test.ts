@@ -116,6 +116,7 @@ class FakeDatabase implements TransactionalDatabaseClientPort {
 }
 
 function defaultHandler(sql: string): readonly unknown[] {
+  if (sql.includes("app_private.sync_device_state")) return [{ state: "active" }];
   if (sql.includes("app_private.create_inventory_supplier")) return [supplierRow];
   if (sql.includes("app_private.update_inventory_supplier")) return [supplierRow];
   if (sql.includes("app_private.read_inventory_supplier_for_manage")) return [supplierRow];
@@ -431,13 +432,28 @@ test("receivePurchaseOrder: reads the scope, authorizes and sends the receipt pa
   });
   assert.deepEqual(result, { status: "received", movements: [{ lineId, movementId }] });
   assert.equal(database.queries[0]?.sql.includes("app_private.read_inventory_purchase_order"), true);
-  assert.equal(database.queries[1]?.sql.includes("app_private.inventory_receive_purchase_order"), true);
-  assert.deepEqual(database.queries[1]?.parameters.slice(0, 2), [principal.actorId, orderId]);
-  assert.deepEqual(JSON.parse(String(database.queries[1]?.parameters[2])), {
+  assert.equal(database.queries[1]?.sql.includes("app_private.sync_device_state"), true);
+  assert.deepEqual(database.queries[1]?.parameters, [restaurantId, branchId, deviceId, principal.actorId]);
+  assert.equal(database.queries[2]?.sql.includes("app_private.inventory_receive_purchase_order"), true);
+  assert.deepEqual(database.queries[2]?.parameters.slice(0, 2), [principal.actorId, orderId]);
+  assert.deepEqual(JSON.parse(String(database.queries[2]?.parameters[2])), {
     warehouseId,
     deviceId,
     occurredAt: "2026-11-26T12:00:00.000Z",
   });
+});
+
+test("receivePurchaseOrder: a device that is not registered for the actor is rejected before the receipt", async () => {
+  const { service, database } = serviceFor({
+    handler: (sql) => (sql.includes("app_private.sync_device_state")
+      ? [{ state: "revoked" }]
+      : sql.includes("app_private.read_inventory_purchase_order") ? [orderDetailRow] : defaultHandler(sql)),
+  });
+  await assert.rejects(
+    service.receivePurchaseOrder(principal, orderId, { warehouseId, deviceId }),
+    code("device"),
+  );
+  assert.equal(database.queries.some((query) => query.sql.includes("inventory_receive_purchase_order")), false);
 });
 
 test("receivePurchaseOrder: a missing warehouseId is rejected before the database", async () => {

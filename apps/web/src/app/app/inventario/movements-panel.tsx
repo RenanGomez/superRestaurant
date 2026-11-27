@@ -64,6 +64,10 @@ const DIALOG_SUBMIT_LABELS: Readonly<Record<InventoryMovementAction, string>> = 
 interface MovementsPanelProps {
   readonly action: (operation: InventoryOperation, input?: unknown) => Promise<InventoryActionResult>;
   readonly canManage: boolean;
+  /** Derived per-actor id; the API rejects movements from a device it does not know. */
+  readonly deviceId: string;
+  /** True only after the device is registered for this actor and branch. */
+  readonly deviceReady: boolean;
   readonly items: readonly InventoryItemV1[];
   readonly warehouses: readonly InventoryWarehouseV1[];
   readonly itemsStatus: LoadStatus;
@@ -74,6 +78,8 @@ interface MovementsPanelProps {
 export function MovementsPanel({
   action,
   canManage,
+  deviceId,
+  deviceReady,
   items,
   warehouses,
   itemsStatus,
@@ -178,7 +184,7 @@ export function MovementsPanel({
                 key={kind}
                 type="button"
                 className={uiButton(kind === "waste" ? "danger" : "primary")}
-                disabled={!catalogReady}
+                disabled={!catalogReady || !deviceReady}
                 onClick={() => setDialog(kind)}
               >
                 {INVENTORY_MOVEMENT_ACTION_LABELS[kind]}
@@ -202,6 +208,11 @@ export function MovementsPanel({
       {catalogReady === false && catalogLoading === false && catalogError === false && (
         <p className="text-sm text-text-muted">
           Necesitas al menos un insumo y un almacén en esta sucursal para registrar movimientos.
+        </p>
+      )}
+      {!deviceReady && (
+        <p role="status" className="text-sm text-text-muted">
+          Registrando este equipo… podrás guardar movimientos en cuanto quede autorizado.
         </p>
       )}
 
@@ -313,6 +324,7 @@ export function MovementsPanel({
       {dialog !== undefined && (
         <MovementDialog
           action={action}
+          deviceId={deviceId}
           items={items}
           kind={dialog}
           warehouses={warehouses}
@@ -333,8 +345,9 @@ function LoadError({ message, onRetry }: { readonly message: string; readonly on
   );
 }
 
-function MovementDialog({ action, items, kind, warehouses, onClose, onSaved }: {
+function MovementDialog({ action, deviceId, items, kind, warehouses, onClose, onSaved }: {
   readonly action: MovementsPanelProps["action"];
+  readonly deviceId: string;
   readonly items: readonly InventoryItemV1[];
   readonly kind: InventoryMovementAction;
   readonly warehouses: readonly InventoryWarehouseV1[];
@@ -376,6 +389,7 @@ function MovementDialog({ action, items, kind, warehouses, onClose, onSaved }: {
     void (async () => {
       try {
         const reply = await action("createMovement", {
+          deviceId,
           idempotencyKey,
           itemId,
           kind: validation.kind,

@@ -100,6 +100,12 @@ export async function inventoryApiFlow(): Promise<void> {
     { databasePrefix: "superrestaurant_http_inventory_api", marker, stage: "http_flow_inventory_api" },
     async (context) => {
       const { restaurantId, branchId } = context.scope;
+      // Inventory writes validate the device against `app.sync_devices`; the real browser registers
+      // its per-actor id before writing, so the flow does the same for the manager.
+      await context.admin.query(
+        "select app_private.sync_register_device($1::uuid,$2::uuid,$3::uuid,$4::text)",
+        [context.fixtures.actorIds.manager, restaurantId, branchId, context.deviceId],
+      );
       const categoryId = randomUUID();
       const recipeProductId = randomUUID();
       const plainProductId = randomUUID();
@@ -290,6 +296,33 @@ export async function inventoryApiFlow(): Promise<void> {
         { itemId: cheeseId, quantity: 2, unitCode: "g", unitCostMinor: 1_750 },
       ], `reception-${randomUUID()}`);
       const receptionOrderId = String(receptionOrder.orderId);
+      // 8.0 A device that is not registered for this actor cannot write: the receipt is rejected
+      // before touching balances, and the order stays receivable.
+      const foreignDeviceCheck = await context.send("manager", "POST", `/inventory/purchase-orders/${receptionOrderId}/receive`, {
+        warehouseId: defaultWarehouseId, deviceId: randomUUID(), occurredAt: nowIso(), receivedAt: nowIso(),
+      });
+      expectStatus(foreignDeviceCheck, 403, "receive_foreign_device");
+      assert.equal(foreignDeviceCheck.body.code, "INVENTORY_DEVICE_REJECTED");
+      const foreignMovement = await context.send("manager", "POST", "/inventory/movements", {
+        branchId,
+        compensatesMovementId: null,
+        currency: null,
+        idempotencyKey: randomUUID(),
+        itemId: flourId,
+        kind: "adjustment",
+        quantityDelta: 1,
+        reason: "Dispositivo ajeno",
+        restaurantId,
+        toWarehouseId: null,
+        transferPairId: null,
+        unitCode: "g",
+        unitCostMinor: null,
+        warehouseId: defaultWarehouseId,
+      }, { "x-device-id": randomUUID() });
+      expectStatus(foreignMovement, 403, "movement_foreign_device");
+      assert.equal(foreignMovement.body.code, "INVENTORY_DEVICE_REJECTED");
+      assert.equal(await count(context, "select count(*)::int as total from app.inventory_movements where restaurant_id = $1 and item_id = $2", [restaurantId, flourId]), 0);
+      context.check("device_registry_isolation");
       const received = await context.send("manager", "POST", `/inventory/purchase-orders/${receptionOrderId}/receive`, {
         warehouseId: defaultWarehouseId, deviceId: context.deviceId, occurredAt: nowIso(), receivedAt: nowIso(),
       });

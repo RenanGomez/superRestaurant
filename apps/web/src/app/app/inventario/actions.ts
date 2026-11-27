@@ -542,7 +542,7 @@ export async function inventoryAction(
       unitCode: command.unitCode,
       unitCostMinor: null,
       warehouseId: command.warehouseId,
-    });
+    }, command.deviceId === undefined ? undefined : { "x-device-id": command.deviceId });
     if (!reply.ok) return reply;
     return plainRecord(reply.body) === undefined ? unavailable() : { ok: true, recorded: true };
   }
@@ -1361,6 +1361,8 @@ interface ManualMovementCommand {
   readonly reason: string;
   readonly idempotencyKey: string;
   readonly toWarehouseId: string | null;
+  /** Audit trace only; the action turns it into the `x-device-id` header. */
+  readonly deviceId: string | undefined;
 }
 
 function readMovementCommand(input: unknown): ManualMovementCommand | undefined {
@@ -1375,6 +1377,11 @@ function readMovementCommand(input: unknown): ManualMovementCommand | undefined 
   const unitCode = own(record, "unitCode");
   const reason = readText(own(record, "reason"), 500);
   const idempotencyKey = own(record, "idempotencyKey");
+  const rawDevice = own(record, "deviceId");
+  if (rawDevice !== undefined && (typeof rawDevice !== "string" || !UUID_PATTERN.test(rawDevice))) {
+    return undefined;
+  }
+  const deviceId = typeof rawDevice === "string" ? rawDevice : undefined;
   const rawTarget = own(record, "toWarehouseId");
   if (rawTarget !== undefined && rawTarget !== null
     && (typeof rawTarget !== "string" || !UUID_PATTERN.test(rawTarget))) {
@@ -1400,6 +1407,7 @@ function readMovementCommand(input: unknown): ManualMovementCommand | undefined 
   }
 
   return Object.freeze({
+    deviceId,
     idempotencyKey,
     itemId,
     kind,
@@ -1416,6 +1424,7 @@ async function send(
   url: string,
   method: "GET" | "PATCH" | "POST",
   body?: unknown,
+  headers?: Readonly<Record<string, string>>,
 ): Promise<{ readonly ok: true; readonly body: unknown } | { readonly ok: false; readonly error: InventoryError }> {
   let response: Response;
   try {
@@ -1424,6 +1433,7 @@ async function send(
       headers: {
         authorization: `Bearer ${accessToken}`,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(headers ?? {}),
       },
       method,
       signal: AbortSignal.timeout(10_000),

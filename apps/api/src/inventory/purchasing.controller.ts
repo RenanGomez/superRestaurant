@@ -118,6 +118,7 @@ export class PurchasingController {
       if (error instanceof PurchasingApplicationError) {
         if (error.code === "request") throw new BadRequestException({ code: "INVENTORY_REQUEST_INVALID" });
         if (error.code === "authorization") throw new ForbiddenException({ code: "ACTION_NOT_AUTHORIZED" });
+        if (error.code === "device") throw new ForbiddenException({ code: "INVENTORY_DEVICE_REJECTED" });
         if (error.code === "conflict") throw new ConflictException({ code: "INVENTORY_CONFLICT" });
         if (error.code === "missing") throw new NotFoundException({ code: "INVENTORY_NOT_FOUND" });
         if (error.code === "idempotency-conflict") {

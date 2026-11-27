@@ -11,6 +11,7 @@ import {
   type DatabaseQueryResult,
   type TransactionalDatabaseClientPort,
 } from "../database.js";
+import { isRegisteredInventoryDevice } from "./device-authorization.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
@@ -53,6 +54,7 @@ const RECEIVE_KEYS = Object.freeze(["warehouseId", "deviceId", "occurredAt", "re
 export type PurchasingApplicationErrorCode =
   | "request"
   | "authorization"
+  | "device"
   | "conflict"
   | "missing"
   | "idempotency-conflict"
@@ -328,6 +330,12 @@ export class PurchasingService {
 
     const existing = await this.readPurchaseOrder(principal, orderId);
     await this.authorizeBranch(principal, existing.restaurantId, existing.branchId);
+    if (command.deviceId !== undefined && !(await isRegisteredInventoryDevice(this.database, {
+      actorId: principal.actorId,
+      restaurantId: existing.restaurantId,
+      branchId: existing.branchId,
+      deviceId: command.deviceId,
+    }))) throw new PurchasingApplicationError("device");
 
     const payload: Record<string, unknown> = { warehouseId: command.warehouseId };
     if (command.deviceId !== undefined) payload["deviceId"] = command.deviceId;
