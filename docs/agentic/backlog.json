@@ -1876,12 +1876,132 @@
         "prueba de helper y verificacion visual desktop y 390x844"
       ],
       "etaMin": 30,
-      "attempts": 0,
-      "status": "todo",
+      "attempts": 1,
+      "status": "review",
       "sessionId": null,
-      "pr": null,
+      "pr": 152,
       "parent": null,
-      "note": "Deuda activa: panel vacio para viewer/auditor."
+      "note": "Fusionado #152: el panel carga con canRead y oculta escritura con canManage. Pase visual de inventario con la sesion de manager; la variante viewer/auditor sigue sin cuenta web, asi que el item queda en REVIEW hasta verla en navegador."
+    },
+    {
+      "id": "o5-rbac-matrix-shared",
+      "title": "Matriz RBAC unica en shared-types para web y API",
+      "milestone": "Ola 5",
+      "phase": 5,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "packages/shared-types/src/index.ts",
+        "apps/api/src/auth/rbac-policy.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "RBAC_ROLE_PERMISSIONS_V1 y rolesGrantPermission en shared-types sin infraestructura",
+        "el API los reexporta y sus importadores no cambian",
+        "prueba del paquete con catalog.read/catalog.manage y entradas hostiles"
+      ],
+      "etaMin": 20,
+      "attempts": 1,
+      "status": "done",
+      "sessionId": null,
+      "pr": 152,
+      "parent": "debt-compras-reads",
+      "note": "shared-types 49/49, API typecheck/test en 0. Sin segunda copia de la matriz."
+    },
+    {
+      "id": "m4-metrics-catalog",
+      "title": "Catalogo de metricas con fuente autoritativa y reconciliacion",
+      "milestone": "Ola 6",
+      "phase": 6,
+      "level": "D",
+      "lane": "gemini",
+      "paths": [
+        "docs/architecture/metrics-catalog.md"
+      ],
+      "deps": [],
+      "acceptance": [
+        "una fila por metrica con definicion, fuente, zona horaria, dueno y estado",
+        "lo que no existe se anota como tarea de la Ola 7, no se inventa"
+      ],
+      "etaMin": 45,
+      "attempts": 1,
+      "status": "done",
+      "sessionId": null,
+      "pr": 151,
+      "parent": null,
+      "note": "15 filas: 8 implementadas, 4 parciales, 3 inexistentes; 5 huecos con id sql-* para la Ola 7."
+    },
+    {
+      "id": "m4-adr-014-exports",
+      "title": "ADR-014: exportacion CSV/XLSX/PDF con streaming del servidor",
+      "milestone": "Ola 6",
+      "phase": 6,
+      "level": "D",
+      "lane": "dsh",
+      "paths": [
+        "docs/adr/ADR-014.md"
+      ],
+      "deps": [
+        "m4-metrics-catalog"
+      ],
+      "acceptance": [
+        "CSV nativo sin dependencias, XLSX y PDF con una dependencia cada uno y su motivo",
+        "limites de rango, filas, bytes, memoria y criterio de streaming",
+        "cinco invariantes y cinco alternativas descartadas"
+      ],
+      "etaMin": 45,
+      "attempts": 1,
+      "status": "done",
+      "sessionId": null,
+      "pr": 151,
+      "parent": null,
+      "note": "Techo del contrato calculado (50 turnos x 50 cajas x 12 movimientos); la implementacion va a la Ola 7."
+    },
+    {
+      "id": "o5-p3-invalid-scope",
+      "title": "INVALID_SCOPE con codigo propio y rechazo terminal por evento",
+      "milestone": "Ola 5",
+      "phase": 5,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "apps/api/src/sync/sync-merge-executor.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "el codigo no esta en SYNC_REVOCATION_CODES ni en SYNC_RECOVERABLE_REJECTION_CODES",
+        "prueba de los cinco codigos de rechazo"
+      ],
+      "etaMin": 15,
+      "attempts": 1,
+      "status": "done",
+      "sessionId": null,
+      "pr": 153,
+      "parent": null,
+      "note": "Revision cruzada de gemini: APROBAR con un P3 (falta prueba de execute() con scope mal formado) anotado en debt.md."
+    },
+    {
+      "id": "o5-p3-capture-args",
+      "title": "El verificador de capture exige un modo explicito",
+      "milestone": "Ola 5",
+      "phase": 5,
+      "level": "B",
+      "lane": "dsh",
+      "paths": [
+        "apps/api/src/operations/run-capture-schema-verification.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "solo --local-disposable-only o --remote-only; cualquier otra cosa falla cerrado",
+        "prueba del parser y runbook actualizado"
+      ],
+      "etaMin": 15,
+      "attempts": 1,
+      "status": "done",
+      "sessionId": null,
+      "pr": 154,
+      "parent": null,
+      "note": "La revision de codex encontro un P1 real en el comando del runbook (argv de node -e); corregido y verificado en la misma rama."
     }
   ]
 }
