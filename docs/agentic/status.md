@@ -35,6 +35,9 @@ Actualizado: 2026-11-26 (Ola 5, segundo corte: rechazos recuperables del sync y 
     cero en CI y **aplicada a dev** con el protocolo §19.6 (sonda 3 sentencias `ok`, respaldo 1 391 471
     bytes/130 tablas, dry-run exacto, apply único, postcheck `upToDate` y segundo dry-run `upToDate`;
     comentarios leídos de `pg_description`). `lastRemote=20261126001500`.
+  - Pase visual real de `/app/sync` **2/2** (1366×800 y 390×844) con la sesión que renovó Emmanuel:
+    consola y red limpias, capturas en `docs/agentic/visual-m2/`. En 390 px la guarda de sucursal pasó a
+    aceptar el anuncio accesible del shell (#145).
   - Servidores locales levantados con `SYNC_CURSOR_SECRET` efímero (sin él la API no arranca); la sesión
     de Playwright sigue caducada y falta el login manual.
 - **Siguiente ola:** `o0-device-registry` (A) con la decisión ya tomada (**derivar el `deviceId` de

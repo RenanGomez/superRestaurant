@@ -142,6 +142,10 @@
   "r2": {},
   "changes": [
     {
+      "h": "Barra de sync verificada en navegador real",
+      "p": "Pase visual de /app/sync en 1366x800 y 390x844 con sesion real: consola y red limpias, sin desborde ni dialogos nativos. Se ve En linea, sucursal, 0 pendientes y 0 revisiones; el aviso de otra pestana solo aparece cuando hay una segunda pestana (esta era la lider). Capturas en docs/agentic/visual-m2."
+    },
+    {
       "h": "Rechazos recuperables del sync ya no revocan el equipo",
       "p": "Si el servidor no conoce el equipo (DEVICE_UNKNOWN) o el token es de otro actor (ACTOR_MISMATCH), el movimiento se reintenta con la misma clave y el equipo vuelve a registrarse; antes el scope quedaba revocado y las ventas pendientes se mandaban a revision manual."
     },
