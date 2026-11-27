@@ -45,6 +45,8 @@
     "src/lib/plan-draft.test.ts",
     "src/lib/branch-selection.ts",
     "src/lib/branch-selection.test.ts",
+    "src/lib/inventory-access.ts",
+    "src/lib/inventory-access.test.ts",
     "src/lib/menu-catalog.ts",
     "src/lib/menu-catalog.test.ts",
     "src/lib/menu-images.ts",

@@ -72,11 +72,12 @@ interface InventoryWorkspaceProps {
   readonly action: (operation: InventoryOperation, input?: unknown) => Promise<InventoryActionResult>;
   readonly actorId: string;
   readonly canManage: boolean;
+  readonly canRead: boolean;
   readonly initialTab: InventoryTab;
   readonly scope: BranchScope;
 }
 
-export function InventoryWorkspace({ action, actorId, canManage, initialTab, scope }: InventoryWorkspaceProps): ReactNode {
+export function InventoryWorkspace({ action, actorId, canManage, canRead, initialTab, scope }: InventoryWorkspaceProps): ReactNode {
   const device = useInventoryDevice(actorId, scope);
   const [activeTab, setActiveTab] = useState<InventoryTab>(initialTab);
   const [items, setItems] = useState<LoadState<readonly InventoryItemV1[]>>({ status: "idle" });
@@ -366,6 +367,7 @@ export function InventoryWorkspace({ action, actorId, canManage, initialTab, sco
           <PurchasingPanel
             action={action}
             canManage={canManage}
+            canRead={canRead}
             deviceId={device.deviceId}
             deviceStatus={device.status}
             items={items.status === "ready" ? items.value : []}

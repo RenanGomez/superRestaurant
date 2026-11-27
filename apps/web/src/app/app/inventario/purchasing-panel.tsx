@@ -71,6 +71,7 @@ type DialogState =
 interface PurchasingPanelProps {
   readonly action: (operation: InventoryOperation, input?: unknown) => Promise<InventoryActionResult>;
   readonly canManage: boolean;
+  readonly canRead: boolean;
   /** Derived per-actor id; the API rejects receipts from a device it does not know. */
   readonly deviceId: string;
   /** True only after the device is registered for this actor and branch. */
@@ -85,6 +86,7 @@ interface PurchasingPanelProps {
 export function PurchasingPanel({
   action,
   canManage,
+  canRead,
   deviceId,
   deviceStatus,
   items,
@@ -114,7 +116,7 @@ export function PurchasingPanel({
   const [timeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
 
   useEffect(() => {
-    if (!canManage) {
+    if (!canRead) {
       setSuppliers(undefined);
       setSuppliersError(undefined);
       return undefined;
@@ -136,10 +138,10 @@ export function PurchasingPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [action, canManage, suppliersReload]);
+  }, [action, canRead, suppliersReload]);
 
   useEffect(() => {
-    if (!canManage) {
+    if (!canRead) {
       setOrders(undefined);
       setOrdersError(undefined);
       return undefined;
@@ -161,10 +163,10 @@ export function PurchasingPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [action, canManage, ordersReload, statusFilter]);
+  }, [action, canRead, ordersReload, statusFilter]);
 
   useEffect(() => {
-    if (!canManage || orderId === "") {
+    if (!canRead || orderId === "") {
       setDetail(undefined);
       setDetailError(undefined);
       return undefined;
@@ -186,7 +188,7 @@ export function PurchasingPanel({
       }
     })();
     return () => { cancelled = true; };
-  }, [action, canManage, detailReload, orderId]);
+  }, [action, canRead, detailReload, orderId]);
 
   useEffect(() => {
     if (notice === undefined) return undefined;
@@ -252,6 +254,10 @@ export function PurchasingPanel({
         <h2 className="break-words font-heading text-lg font-semibold">Compras</h2>
         {canManage ? (
           <p className="text-sm text-text-muted">Registra proveedores, crea órdenes y recíbelas contra un almacén.</p>
+        ) : canRead ? (
+          <p className="text-sm text-text-muted">
+            Puedes consultar proveedores y órdenes de compra. Solo un encargado puede crearlos, editarlos o recibirlos.
+          </p>
         ) : (
           <p role="status" className="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text-muted">
             Tu rol no permite administrar compras. Pide a un encargado que registre proveedores y órdenes.
@@ -266,15 +272,17 @@ export function PurchasingPanel({
         <p role="alert" className="rounded-lg border border-error bg-error-bg px-3 py-2 text-sm">{actionError}</p>
       )}
 
-      {canManage && (
+      {canRead && (
         <>
           <section className="grid gap-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="break-words font-heading text-base font-semibold">Proveedores</h3>
-              <button type="button" className={uiButton("primary", "w-full sm:w-auto")}
-                onClick={() => setDialog({ kind: "supplier" })}>
-                Nuevo proveedor
-              </button>
+              {canManage && (
+                <button type="button" className={uiButton("primary", "w-full sm:w-auto")}
+                  onClick={() => setDialog({ kind: "supplier" })}>
+                  Nuevo proveedor
+                </button>
+              )}
             </div>
 
         {suppliers === undefined && suppliersError === undefined && (
