@@ -1,7 +1,7 @@
 {
   "version": "2.0.0",
   "milestone": "M2/ola-0",
-  "updatedAt": "2026-11-26",
+  "updatedAt": "2026-11-27",
   "source": "docs/plans/plan-deepseek-fases-3-8.md",
   "notes": "M1/M2 cerrados (M2 con puertas humanas). M3: API de inventario completa y UI con insumos, recetas, almacenes, movimientos, compras, alertas y costos (#99-#114); contratos HTTP de inventario en verde; faltan journey E2E, pase visual real y el cierre de deuda P3.",
   "items": [
@@ -1672,12 +1672,12 @@
         "invariantes SQL y verificador de inventario en verde"
       ],
       "etaMin": 35,
-      "attempts": 0,
-      "status": "todo",
+      "attempts": 1,
+      "status": "done",
       "sessionId": null,
-      "pr": null,
+      "pr": 147,
       "parent": null,
-      "note": "P2 de debt.md (Ola 4): hoy deviceId es traza de auditoria; validarlo exige migracion (nivel A)."
+      "note": "Resuelto en #147/#148: id derivado por actor, registro previo con timeout y validacion sync_device_state en movimientos y recepcion. M2 cerrado en su alcance tecnico; puertas humanas aparte."
     },
     {
       "id": "debt-compras-reads",

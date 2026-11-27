@@ -142,6 +142,10 @@
   "r2": {},
   "changes": [
     {
+      "h": "El inventario registra el equipo antes de escribir",
+      "p": "Movimientos y recepcion de compras validan el dispositivo contra el registro de sync: si es ajeno o desconocido, el API responde 403 y no toca saldos. El id se deriva por cajero, asi que una tablet compartida ya no choca. Mientras el equipo no queda confirmado, la UI lo dice y no ofrece el boton."
+    },
+    {
       "h": "Barra de sync verificada en navegador real",
       "p": "Pase visual de /app/sync en 1366x800 y 390x844 con sesion real: consola y red limpias, sin desborde ni dialogos nativos. Se ve En linea, sucursal, 0 pendientes y 0 revisiones; el aviso de otra pestana solo aparece cuando hay una segunda pestana (esta era la lider). Capturas en docs/agentic/visual-m2."
     },
@@ -195,6 +199,10 @@
     }
   ],
   "decisions": [
+    {
+      "h": "M2 cerrado en su alcance tecnico",
+      "p": "Purga, liderazgo entre pestanas y registro de dispositivos estan fusionados y probados. Siguen abiertas las puertas humanas: dispositivo real, impresora, ASAP 15/30 y la prueba del operador."
+    },
     {
       "h": "20261126001500 aplicada en dev",
       "p": "Con Docker arriba se hizo el protocolo completo: sonda rollback-only (3 sentencias), respaldo schema-only verificado (1 391 471 bytes, 130 tablas), dry-run exacto, apply unico, postcheck upToDate y segundo dry-run upToDate. Los tres comentarios de compras ya dicen catalog.read en la base."
