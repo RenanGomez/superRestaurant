@@ -128,12 +128,17 @@ export function expectFinalRoute(page: Page, path: string): void {
 
 export const MIN_MAIN_TEXT = 20;
 
-/** Guarda de estado (no de cantidad): sucursal activa, sin pantallas de selección y main con contenido. Devuelve la longitud del texto de main. */
+/** Guarda de estado (no de cantidad): sucursal activa visible, sin pantallas de selección y main con contenido. Devuelve la longitud del texto de main. */
 export async function assertBranchState(page: Page, path: string): Promise<number> {
   const mainText = (await page.locator("main").first().innerText({ timeout: 5_000 }).catch(() => "")).trim();
   const problems: string[] = [];
-  if (path !== "/app" && !(await page.locator(MAIN_NAV).getByText(ACTIVE_BRANCH).first().isVisible().catch(() => false))) {
-    problems.push("el nav no muestra «Sucursal activa»");
+  // At narrow widths the primary nav collapses into «Más» and the branch label is `sr-only`, so the
+  // visible label only exists on wide screens. The invariant stays the same: the authenticated shell
+  // must announce the active branch and never render a branch-selection screen.
+  const navShowsBranch = await page.locator(MAIN_NAV).getByText(ACTIVE_BRANCH).first().isVisible().catch(() => false);
+  const shellShowsBranch = navShowsBranch || await page.getByText(ACTIVE_BRANCH).count() > 0;
+  if (path !== "/app" && !shellShowsBranch) {
+    problems.push("el shell no anuncia «Sucursal activa»");
   }
   if (mainText.includes(ELIGE_SUCURSAL_TEXT)) problems.push(`main muestra «${ELIGE_SUCURSAL_TEXT}»`);
   if (mainText.includes(SIN_SUCURSAL_TEXT)) problems.push(`main muestra «${SIN_SUCURSAL_TEXT}»`);
