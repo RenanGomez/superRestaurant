@@ -6,6 +6,9 @@ import { ensureInventoryDeviceId, type InventoryDeviceStore } from "./inventory-
 /** Same-origin route that registers the device for this actor inside a scoped branch. */
 export const INVENTORY_DEVICE_REGISTRATION_PATH = "/api/sync/devices";
 
+/** A stuck registration must not hang the page or block the sync bar's `networkidle`. */
+export const INVENTORY_DEVICE_REGISTRATION_TIMEOUT_MS = 8_000;
+
 /**
  * The id inventory writes send: derived per `(browser profile, actor)`, exactly like the sync
  * bridge. The profile id stays in `localStorage`; only the derived id reaches the API, so a
@@ -28,6 +31,7 @@ export async function registerInventoryDevice(input: {
   readonly deviceId: string;
   readonly scope: BranchScope;
   readonly fetchImpl?: typeof fetch;
+  readonly timeoutMs?: number;
 }): Promise<boolean> {
   const send = input.fetchImpl ?? (typeof fetch === "function" ? fetch : undefined);
   if (send === undefined) return false;
@@ -37,7 +41,10 @@ export async function registerInventoryDevice(input: {
       cache: "no-store",
       headers: { "content-type": "application/json" },
       method: "POST",
+      signal: AbortSignal.timeout(input.timeoutMs ?? INVENTORY_DEVICE_REGISTRATION_TIMEOUT_MS),
     });
+    // Consume the body: an unread response keeps the request open and blocks `networkidle`.
+    await response.text().catch(() => undefined);
     return response.ok;
   } catch {
     return false;

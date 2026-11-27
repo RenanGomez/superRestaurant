@@ -9,7 +9,9 @@
    hash que usa el puente de sync (`syncDeviceIdForActor`). Así una tablet compartida tiene una fila
    por cajero en `app.sync_devices` en vez de una fila del primer actor que la registró.
 3. El panel **registra el equipo antes de escribir** (`POST /api/sync/devices` con
-   `{deviceId, scope}`) y no habilita movimientos ni recepción hasta que el servidor lo confirma.
+   `{deviceId, scope}`) y no habilita movimientos ni recepción hasta que el servidor lo confirma. El
+   registro usa un timeout de 8 s y consume la respuesta: si falla, la UI lo dice y pide recargar en
+   lugar de ofrecer una acción que el API va a rechazar.
 4. El servidor **valida** el `deviceId` contra `app_private.sync_device_state` en movimientos y
    recepción de compras: un dispositivo `unknown` o `revoked` se rechaza con
    `403 INVENTORY_DEVICE_REJECTED` y sin efectos. Sigue sin ser una autorización: el actor sale de la

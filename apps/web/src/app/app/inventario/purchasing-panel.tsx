@@ -4,6 +4,7 @@ import type { InventoryItemV1, InventoryWarehouseV1 } from "@super-restaurant/sh
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { Field } from "../../../components/field-hint";
+import type { InventoryDeviceStatus } from "./use-inventory-device";
 import {
   ensureInventoryIdempotencyKey,
   formatInventoryNumber,
@@ -73,7 +74,7 @@ interface PurchasingPanelProps {
   /** Derived per-actor id; the API rejects receipts from a device it does not know. */
   readonly deviceId: string;
   /** True only after the device is registered for this actor and branch. */
-  readonly deviceReady: boolean;
+  readonly deviceStatus: InventoryDeviceStatus;
   readonly items: readonly InventoryItemV1[];
   readonly itemsStatus: LoadStatus;
   readonly warehouses: readonly InventoryWarehouseV1[];
@@ -85,7 +86,7 @@ export function PurchasingPanel({
   action,
   canManage,
   deviceId,
-  deviceReady,
+  deviceStatus,
   items,
   itemsStatus,
   warehouses,
@@ -196,7 +197,7 @@ export function PurchasingPanel({
   const activeSuppliers = suppliers?.filter((supplier) => supplier.active) ?? [];
   const catalogReady = itemsStatus === "ready" && items.length > 0
     && suppliers !== undefined && activeSuppliers.length > 0;
-  const receiveReady = deviceReady && warehousesStatus === "ready" && warehouses.length > 0 && deviceId !== "";
+  const receiveReady = deviceStatus === "ready" && warehousesStatus === "ready" && warehouses.length > 0 && deviceId !== "";
 
   function supplierSaved(saved: SupplierV1): void {
     setSuppliers((current) => {

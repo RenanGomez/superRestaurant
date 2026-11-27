@@ -9,6 +9,7 @@ import type {
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { Field } from "../../../components/field-hint";
+import type { InventoryDeviceStatus } from "./use-inventory-device";
 import {
   INVENTORY_MOVEMENT_ACTIONS,
   INVENTORY_MOVEMENT_ACTION_LABELS,
@@ -67,7 +68,7 @@ interface MovementsPanelProps {
   /** Derived per-actor id; the API rejects movements from a device it does not know. */
   readonly deviceId: string;
   /** True only after the device is registered for this actor and branch. */
-  readonly deviceReady: boolean;
+  readonly deviceStatus: InventoryDeviceStatus;
   readonly items: readonly InventoryItemV1[];
   readonly warehouses: readonly InventoryWarehouseV1[];
   readonly itemsStatus: LoadStatus;
@@ -79,7 +80,7 @@ export function MovementsPanel({
   action,
   canManage,
   deviceId,
-  deviceReady,
+  deviceStatus,
   items,
   warehouses,
   itemsStatus,
@@ -184,7 +185,7 @@ export function MovementsPanel({
                 key={kind}
                 type="button"
                 className={uiButton(kind === "waste" ? "danger" : "primary")}
-                disabled={!catalogReady || !deviceReady}
+                disabled={!catalogReady || deviceStatus !== "ready"}
                 onClick={() => setDialog(kind)}
               >
                 {INVENTORY_MOVEMENT_ACTION_LABELS[kind]}
@@ -210,9 +211,11 @@ export function MovementsPanel({
           Necesitas al menos un insumo y un almacén en esta sucursal para registrar movimientos.
         </p>
       )}
-      {!deviceReady && (
+      {deviceStatus !== "ready" && (
         <p role="status" className="text-sm text-text-muted">
-          Registrando este equipo… podrás guardar movimientos en cuanto quede autorizado.
+          {deviceStatus === "rejected"
+            ? "No se pudo confirmar este equipo para inventario. Recarga la página para intentarlo de nuevo."
+            : "Registrando este equipo… podrás guardar movimientos en cuanto quede autorizado."}
         </p>
       )}
 
