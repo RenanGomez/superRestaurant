@@ -15,6 +15,7 @@ import {
 import {
   CURSOR_RESYNC_CODES,
   OUTBOX_STATES,
+  RECOVERABLE_REJECTION_CODES,
   REVOCATION_CODES,
   SYNC_PROTOCOL_VERSION,
   SYNC_SCHEMA_VERSION,
@@ -1131,6 +1132,10 @@ export class DeviceSyncEngine {
     if (result === undefined || result.idempotencyKey !== entry.idempotencyKey) return retry("MISSING_RESULT");
     const revokedResult = result.code !== null && REVOCATION_CODES.includes(result.code);
     if (result.status === "rejected" && revokedResult && isFinancial(entry)) return review(result.code ?? "AUTH_REVOKED");
+    // `DEVICE_UNKNOWN` / `ACTOR_MISMATCH` are recoverable: the device registers or the actor
+    // re-authenticates and the same evidence retries. Never a terminal rejection, never review.
+    const recoverable = result.code !== null && RECOVERABLE_REJECTION_CODES.includes(result.code);
+    if (result.status === "rejected" && recoverable) return retry(result.code ?? "DEVICE_UNKNOWN");
     return transitionOutboxState(entry, {
       type: "result",
       status: result.status,

@@ -82,6 +82,12 @@ export const SYNC_FINANCIAL_ENTITY_TYPES = Object.freeze([
 export type SyncFinancialEntityTypeV1 = (typeof SYNC_FINANCIAL_ENTITY_TYPES)[number];
 
 export const SYNC_REVOCATION_CODES = Object.freeze(["AUTH_REVOKED", "DEVICE_REVOKED"] as const);
+/**
+ * Rejections the device can fix by registering or re-authenticating. They are deliberately
+ * NOT revocation codes: the scope stays active, the event keeps its evidence and is retried
+ * with backoff, and pending financial events are not diverted to manual review.
+ */
+export const SYNC_RECOVERABLE_REJECTION_CODES = Object.freeze(["DEVICE_UNKNOWN", "ACTOR_MISMATCH"] as const);
 export const SYNC_CURSOR_RESYNC_CODES = Object.freeze([
   "CURSOR_INVALID",
   "CURSOR_EXPIRED",

@@ -71,7 +71,7 @@ test("executor checks membership and device before processing an event", async (
   assert.equal(checks, 2);
 });
 
-test("rejections are distinguished in the structured log while the wire keeps revocation codes", async (t) => {
+test("rejections travel with their own code and the reason stays in the structured log", async (t) => {
   const logged: string[] = [];
   t.mock.method(console, "info", (line: string) => { logged.push(line); });
   let state = { authorized: true, allowed: true, device: "unknown" };
@@ -86,16 +86,16 @@ test("rejections are distinguished in the structured log while the wire keeps re
   const parsed = parseSyncEnvelopeV1(event);
   assert.ok(parsed);
   const token = "secret-token-should-never-be-logged";
-  assert.equal((await executor.execute(token, parsed))?.code, "DEVICE_REVOKED");
+  assert.equal((await executor.execute(token, parsed))?.code, "DEVICE_UNKNOWN");
   state = { authorized: true, allowed: true, device: "revoked" };
   assert.equal((await executor.execute(token, parsed))?.code, "DEVICE_REVOKED");
   const mismatched = { ...parsed, actorId: "99999999-9999-4999-8999-999999999999" };
-  assert.equal((await executor.execute(token, mismatched))?.code, "AUTH_REVOKED");
+  assert.equal((await executor.execute(token, mismatched))?.code, "ACTOR_MISMATCH");
 
   const records = logged.map((line) => JSON.parse(line) as Record<string, string>);
   assert.deepEqual(
     records.map((record) => [record.code, record.reason]),
-    [["DEVICE_REVOKED", "DEVICE_UNKNOWN"], ["DEVICE_REVOKED", "DEVICE_REVOKED"], ["AUTH_REVOKED", "ACTOR_MISMATCH"]],
+    [["DEVICE_UNKNOWN", "DEVICE_UNKNOWN"], ["DEVICE_REVOKED", "DEVICE_REVOKED"], ["ACTOR_MISMATCH", "ACTOR_MISMATCH"]],
   );
   for (const record of records) {
     assert.deepEqual(Object.keys(record).sort(), ["branchId", "code", "correlationId", "deviceId", "eventId", "reason", "restaurantId"]);

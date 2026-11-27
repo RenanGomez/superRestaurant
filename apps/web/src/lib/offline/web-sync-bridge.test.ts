@@ -563,6 +563,66 @@ test("stableEntityId es determinista para la misma intención", () => {  const f
   assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u);
 });
 
+test("DEVICE_UNKNOWN no revoca el scope: olvida el registro y reintenta con la misma key", async () => {
+  const factory = new IDBFactory();
+  const storage = await openStorage(factory, "device-unknown");
+  let registrations = 0;
+  let pushes = 0;
+  const pushedKeys: string[] = [];
+  const transport: SyncTransportPort = {
+    pull: (request) => Promise.resolve(pullResponse(request.scope)),
+    registerDevice: () => {
+      registrations += 1;
+      return Promise.resolve({ status: "active" });
+    },
+    push: (request: SyncPushRequest): Promise<unknown> => {
+      const event = request.events[0];
+      if (event === undefined) throw new Error("missing event");
+      pushes += 1;
+      pushedKeys.push(event.idempotencyKey);
+      const rejected = pushes === 1;
+      return Promise.resolve({
+        protocolVersion: 1,
+        results: [{
+          auditId: rejected ? null : actor,
+          canonicalVersion: rejected ? null : 1,
+          code: rejected ? "DEVICE_UNKNOWN" : null,
+          eventId: event.eventId,
+          idempotencyKey: event.idempotencyKey,
+          status: rejected ? "rejected" : "accepted",
+        }],
+        scope: request.scope,
+      });
+    },
+  };
+
+  let now = 1_795_478_400_000;
+  const bridge = await openWebSyncBridge({
+    actorId: actor,
+    clock: { nowMs: () => now },
+    deviceId: device,
+    ids: idGenerator(),
+    storage,
+    transport,
+  });
+  assert.equal((await bridge.commitLocalOperation(commitInput(scopeA, "unknown-device-intent")))?.committed, true);
+
+  await bridge.syncNow(scopeA);
+  let snapshot = bridge.getSnapshot(scopeA);
+  assert.equal(snapshot.scopeRevoked, false, "an unregistered device is not a revocation");
+  assert.equal(snapshot.events[0]?.localState, "retry_wait");
+  assert.equal(snapshot.events[0]?.lastErrorCode, "DEVICE_UNKNOWN");
+  assert.equal(registrations, 1);
+
+  // The next sync re-registers before pushing and keeps the same idempotency key.
+  now += 5_000;
+  await bridge.syncNow(scopeA);
+  snapshot = bridge.getSnapshot(scopeA);
+  assert.equal(registrations, 2);
+  assert.deepEqual(pushedKeys, ["unknown-device-intent", "unknown-device-intent"]);
+  assert.equal(snapshot.events[0]?.localState, "accepted");
+});
+
 test("el puente registra el dispositivo exactamente una vez antes del primer push", async () => {
   const factory = new IDBFactory();
   const storage = await openStorage(factory, "register-once");

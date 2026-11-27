@@ -13,6 +13,7 @@ import {
   SYNC_OPERATIONS,
   SYNC_OUTBOX_STATES,
   SYNC_PROTOCOL_VERSION,
+  SYNC_RECOVERABLE_REJECTION_CODES,
   SYNC_REVOCATION_CODES,
   SYNC_SCHEMA_VERSION,
   SYNC_SERVER_RESULT_STATUSES,
@@ -128,6 +129,7 @@ export type ServerResultStatus = SyncServerResultStatusV1;
 export type SyncOperation = SyncOperationV1;
 export const FINANCIAL_ENTITY_TYPES: readonly string[] = SYNC_FINANCIAL_ENTITY_TYPES;
 export const REVOCATION_CODES: readonly string[] = SYNC_REVOCATION_CODES;
+export const RECOVERABLE_REJECTION_CODES: readonly string[] = SYNC_RECOVERABLE_REJECTION_CODES;
 export const CURSOR_RESYNC_CODES: readonly string[] = SYNC_CURSOR_RESYNC_CODES;
 export const ENVELOPE_KEYS = SYNC_ENVELOPE_KEYS;
 

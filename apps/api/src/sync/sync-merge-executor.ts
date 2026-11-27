@@ -15,19 +15,22 @@ import type { SyncEventExecutor } from "./sync-push.service.js";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 type RejectionReason = "AUTH_REVOKED" | "ACTOR_MISMATCH" | "INVALID_SCOPE" | "DEVICE_REVOKED" | "DEVICE_UNKNOWN";
-interface SyncRejection { readonly code: "AUTH_REVOKED" | "DEVICE_REVOKED"; readonly reason: RejectionReason; }
+type RejectionCode = "AUTH_REVOKED" | "DEVICE_REVOKED" | "DEVICE_UNKNOWN" | "ACTOR_MISMATCH";
+interface SyncRejection { readonly code: RejectionCode; readonly reason: RejectionReason; }
 
 /**
- * shortcut: `SyncEventResultV1.code` is an open string, but the only codes the web
- * client and `sync-engine` treat as revocation are `SYNC_REVOCATION_CODES`
- * ("AUTH_REVOKED" | "DEVICE_REVOKED"). Emitting `DEVICE_UNKNOWN` or `ACTOR_MISMATCH`
- * on the wire would stop the client from revoking the scope, so the wire keeps the
- * revocation code and the finer distinction travels in the structured log.
+ * `AUTH_REVOKED`/`DEVICE_REVOKED` are the only codes `sync-engine` treats as credential
+ * revocation (`SYNC_REVOCATION_CODES`). `DEVICE_UNKNOWN` (device not registered for this
+ * actor) and `ACTOR_MISMATCH` (token actor ≠ envelope actor) are recoverable by the client:
+ * they travel with their own code (`SYNC_RECOVERABLE_REJECTION_CODES`) and none of these
+ * rejections is written to the ledger, so the device can register or re-authenticate and
+ * retry the same evidence instead of sending pending financial movements to manual review.
+ * `INVALID_SCOPE` stays on the revocation path (see debt: a client shipping another tenant's
+ * scope should be rejected per event, not revoke the device).
  */
 export function classifyRejection(reason: RejectionReason): SyncRejection {
-  return reason === "DEVICE_REVOKED" || reason === "DEVICE_UNKNOWN"
-    ? { code: "DEVICE_REVOKED", reason }
-    : { code: "AUTH_REVOKED", reason };
+  if (reason === "DEVICE_UNKNOWN" || reason === "ACTOR_MISMATCH") return { code: reason, reason };
+  return reason === "DEVICE_REVOKED" ? { code: "DEVICE_REVOKED", reason } : { code: "AUTH_REVOKED", reason };
 }
 
 @Injectable()
