@@ -1,9 +1,9 @@
 {
   "version": "2.0.0",
   "milestone": "M2/ola-0",
-  "updatedAt": "2026-11-27",
+  "updatedAt": "2026-11-28",
   "source": "docs/plans/plan-deepseek-fases-3-8.md",
-  "notes": "M1/M2 cerrados (M2 con puertas humanas). M3: API de inventario completa y UI con insumos, recetas, almacenes, movimientos, compras, alertas y costos (#99-#114); contratos HTTP de inventario en verde; faltan journey E2E, pase visual real y el cierre de deuda P3.",
+  "notes": "Ola 7, primer corte cerrado: exportación CSV del día (#160), ticket promedio en contrato, pantalla y SQL (#161, #162, migración 20261128000100 aplicada a dev) y proxy de sync con scope por evento (#163). Pendientes: la cuenta viewer/auditor de o5-compras-ui-read, o7-p3-items-42501 y la prueba del operador.",
   "items": [
     {
       "id": "m1-z2b-confirm-pizza-v2",
@@ -1881,7 +1881,7 @@
       "sessionId": null,
       "pr": 152,
       "parent": null,
-      "note": "Fusionado #152: el panel carga con canRead y oculta escritura con canManage. Pase visual de inventario con la sesion de manager; la variante viewer/auditor sigue sin cuenta web, asi que el item queda en REVIEW hasta verla en navegador."
+      "note": "Sigue en REVIEW: no hay cuenta web con rol viewer/auditor en desarrollo y el plan no permite DONE sin verla. API, helper y pase de manager en verde; falta la decision de Emmanuel (crear la cuenta o aceptar la evidencia)."
     },
     {
       "id": "o5-rbac-matrix-shared",
@@ -2002,6 +2002,219 @@
       "pr": 154,
       "parent": null,
       "note": "La revision de codex encontro un P1 real en el comando del runbook (argv de node -e); corregido y verificado en la misma rama."
+    },
+    {
+      "id": "report-export-csv",
+      "title": "Serializador CSV RFC 4180 del resumen del día",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "dsh",
+      "paths": [
+        "apps/api/src/reports/export/csv.ts",
+        "apps/api/src/reports/export/csv.test.ts",
+        "apps/api/package.json"
+      ],
+      "deps": [],
+      "acceptance": [
+        "serializeRfc4180 escapa comillas, comas y saltos y termina cada fila en CRLF",
+        "daySummaryRows emite las secciones en el orden del plan §2.1 con celda vacía cuando no hay dato",
+        "csv.test.js registrado en la cadena test del API"
+      ],
+      "etaMin": 45,
+      "attempts": 2,
+      "status": "done",
+      "sessionId": null,
+      "pr": 160,
+      "parent": "O7",
+      "note": "Revisión de codex encontró un P1 real: las filas se intercalaban por caja en vez de agruparse por sección. Corregido por dsh y verificado (5/5)."
+    },
+    {
+      "id": "report-export-endpoint",
+      "title": "GET /reports/day-summary/export con CSV y límites de ADR-014",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "apps/api/src/reports.controller.ts",
+        "apps/api/src/reports.export.test.ts"
+      ],
+      "deps": [
+        "report-export-csv"
+      ],
+      "acceptance": [
+        "Reutiliza ReportsService.daySummary y no recalcula importes",
+        "400 para rango o fecha inválida, 403 para sucursal ajena, 413 sobre 50 000 filas o 20 MB, 504 sobre 30 s",
+        "Content-Disposition day-summary_<branchId>_<date>_<UTC>.csv y Cache-Control private, no-store"
+      ],
+      "etaMin": 60,
+      "attempts": 3,
+      "status": "done",
+      "sessionId": null,
+      "pr": 160,
+      "parent": "O7",
+      "note": "Tres rondas: compilación con ids branded, autenticación del test con el guard real y verificador doble, y texto UTF-8 con aserciones de cabecera y rango (P2 de gemini)."
+    },
+    {
+      "id": "report-export-web",
+      "title": "Botón de descarga del CSV en /app/reports/day",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "C",
+      "lane": "gemini",
+      "paths": [
+        "apps/web/src/app/api/reports/day-summary/export/route.ts",
+        "apps/web/src/lib/report-export.ts",
+        "apps/web/src/app/app/reports/day/report-export-button.tsx",
+        "apps/web/src/app/app/reports/day/page.tsx"
+      ],
+      "deps": [
+        "report-export-endpoint"
+      ],
+      "acceptance": [
+        "El route handler toma el scope de la cookie y nunca expone el token",
+        "El botón se deshabilita mientras descarga y el error va en role=alert sin alert/confirm/prompt",
+        "Pase visual 1366x800 y 390x844 con descarga real y consola limpia"
+      ],
+      "etaMin": 45,
+      "attempts": 2,
+      "status": "done",
+      "sessionId": null,
+      "pr": 160,
+      "parent": "O7",
+      "note": "P2 de codex: la lectura del cuerpo del API quedó fuera del try y habría devuelto 500; ahora 503. Pase visual 2/2 con descarga day-summary_*.csv."
+    },
+    {
+      "id": "o7-visual-reports-spec",
+      "title": "Spec visual de /app/reports/day con descarga del CSV",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "C",
+      "lane": "dsh",
+      "paths": [
+        "apps/web/e2e/visual/reports-day.spec.ts"
+      ],
+      "deps": [
+        "report-export-web"
+      ],
+      "acceptance": [
+        "Corre en desktop y mobile con E2E_VISUAL=1",
+        "Afirma ruta final, sucursal, tarjetas, botón y descarga con nombre day-summary_*.csv"
+      ],
+      "etaMin": 25,
+      "attempts": 2,
+      "status": "done",
+      "sessionId": null,
+      "pr": 160,
+      "parent": "O7",
+      "note": "dsh murió después de escribir la spec; el orquestador la corrió: 2/2 en 12.4 s con capturas en docs/agentic/visual-2026-11-28/."
+    },
+    {
+      "id": "sql-average-ticket-contract",
+      "title": "ordersPaid.averageMinor opcional y tarjeta Ticket promedio",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "A",
+      "lane": "dsh",
+      "paths": [
+        "packages/shared-types/src/reports.ts",
+        "packages/shared-types/src/reports.runtime.test.ts",
+        "apps/web/src/lib/day-summary.ts",
+        "apps/web/src/lib/day-summary.test.ts"
+      ],
+      "deps": [
+        "report-export-web"
+      ],
+      "acceptance": [
+        "Un productor sin averageMinor sigue parseando y la clave no aparece",
+        "averageMinor null o entero no negativo seguro; cualquier otro valor invalida el resumen",
+        "La vista no calcula el cociente y muestra un guion cuando no hay dato"
+      ],
+      "etaMin": 45,
+      "attempts": 2,
+      "status": "done",
+      "sessionId": null,
+      "pr": 161,
+      "parent": "O7",
+      "note": "Revisión de codex: APROBAR sin hallazgos. Gates del orquestador: shared-types build/test y web test/typecheck/lint en 0. Espera CI."
+    },
+    {
+      "id": "sql-average-ticket",
+      "title": "Ticket promedio calculado en SQL (averageMinor en la función de resumen)",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "A",
+      "lane": "gemini",
+      "paths": [
+        "supabase/migrations/20261128000100_branch_day_summary_average_ticket.sql",
+        "supabase/tests/branch_day_summary_invariants.sql",
+        "apps/api/src/operations/run-branch-day-summary-schema-verification.ts"
+      ],
+      "deps": [
+        "sql-average-ticket-contract"
+      ],
+      "acceptance": [
+        "3 ordenes con venta 100001 dan averageMinor 33334; sin ordenes pagadas da null",
+        "verify:branch-day-summary-schema:rollback aplica la migracion nueva y queda en verde",
+        "Migración aplicada a dev con el protocolo 19.6 antes de declararla DONE"
+      ],
+      "etaMin": 60,
+      "attempts": 3,
+      "status": "done",
+      "sessionId": null,
+      "pr": 162,
+      "parent": "O7",
+      "note": "Migración 20261128000100 aplicada a dev con §19.6 completo (sonda ok, respaldo 1 421 920 bytes/130 tablas, dry-run exacto, apply único, postcheck y segundo dry-run upToDate). Dos fallos reales de CI: el invariante histórico corre antes de la migración (se separó el archivo nuevo con su hook) y el flujo HTTP comparaba ordersPaid con igualdad estricta."
+    },
+    {
+      "id": "o7-p2-sync-proxy-scope",
+      "title": "El proxy de sync valida el scope de cada evento",
+      "milestone": "M2",
+      "phase": 4,
+      "level": "B",
+      "lane": "gemini",
+      "paths": [
+        "apps/web/src/app/api/sync/sync-proxy.ts",
+        "apps/web/src/app/api/sync/sync-proxy.test.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "Un evento con otra sucursal dentro del push se rechaza con 403 sin llamar a forward",
+        "events no-array devuelve 400 y un elemento mal formado falla cerrado",
+        "pull, snapshot y devices siguen igual"
+      ],
+      "etaMin": 35,
+      "attempts": 2,
+      "status": "done",
+      "sessionId": null,
+      "pr": 163,
+      "parent": "debt",
+      "note": "Revisión de dsh: APROBAR sin P1. El P2 (afirmar que getSession/authorize no se invocan) y dos P3 pasan a debt.md."
+    },
+    {
+      "id": "o7-p3-items-42501",
+      "title": "items.service distingue el 42501 de autorización del privilegio real",
+      "milestone": "M3",
+      "phase": 4,
+      "level": "B",
+      "lane": "dsh",
+      "paths": [
+        "apps/api/src/inventory/items.service.ts",
+        "apps/api/src/inventory/items.test.ts"
+      ],
+      "deps": [],
+      "acceptance": [
+        "42501 con INVENTORY_ACTOR_FORBIDDEN sigue siendo authorization",
+        "42501 con otro mensaje (permission denied) pasa a unavailable"
+      ],
+      "etaMin": 20,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "debt",
+      "note": "Brief escrito (.agents/briefs/o7-p3-items-42501.md); no se abrió en esta sesión para no mezclar con la ola de reportes."
     }
   ]
 }

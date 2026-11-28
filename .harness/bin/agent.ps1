@@ -369,6 +369,9 @@ function Invoke-AgyCli {
   if (-not $exe) { return @{ code = 2; out = 'Falta la CLI agy en PATH (%LOCALAPPDATA%\agy\bin\agy.exe).' } }
   $pfile = Join-Path $runDir 'prompt.md'
   $cwd = $root
+  # El brief se lee aquí: fuera de esta función $prompt puede no estar construido todavía (la rama gemini se
+  # ejecuta antes del bloque común) y agy recibiría un prompt vacío.
+  $prompt = (Get-Content $brief -Raw -Encoding UTF8)
   if ($Worktree) {
     $wt = Join-Path $harness "worktrees\$Id"
     if (-not (Test-Path $wt)) {

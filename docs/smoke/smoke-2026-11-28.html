@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smoke superRestaurant</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e2e0da;--ok:#1f7a4a;--fail:#b3261e;--skip:#8a6d1f;--pend:#5b5b5b;--acc:#2c5bd6}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#151514;--card:#1f1f1d;--ink:#eceae4;--mute:#a09e97;--line:#34332f;--ok:#5cc28c;--fail:#ff8a80;--skip:#e0c062;--pend:#b5b3ad;--acc:#8fb0ff}}
+:root[data-theme=dark]{--bg:#151514;--card:#1f1f1d;--ink:#eceae4;--mute:#a09e97;--line:#34332f;--ok:#5cc28c;--fail:#ff8a80;--skip:#e0c062;--pend:#b5b3ad;--acc:#8fb0ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:28px 0 10px}
+.sub{color:var(--mute);margin:0 0 16px}
+.bar{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.prog{flex:1 1 220px;height:10px;background:var(--line);border-radius:6px;overflow:hidden;display:flex}
+.prog i{display:block;height:100%}
+button,select,input[type=text]{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;min-height:40px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
+.tabs button[aria-selected=true]{background:var(--acc);color:#fff;border-color:var(--acc)}
+.item{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--pend);border-radius:10px;padding:12px 14px;margin:8px 0}
+.item[data-s=ok]{border-left-color:var(--ok)}.item[data-s=fail]{border-left-color:var(--fail)}.item[data-s=skip]{border-left-color:var(--skip)}
+.row{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.row h3{flex:1 1 300px;font-size:.98rem;margin:0}
+.steps{margin:6px 0 8px 18px;padding:0;color:var(--ink)}.steps li{margin:2px 0}
+.exp{color:var(--mute);font-size:.9rem;margin:4px 0}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;min-height:36px;padding:6px 10px;font-size:.85rem}
+.seg button[aria-pressed=true][data-v=ok]{background:var(--ok);color:#fff}
+.seg button[aria-pressed=true][data-v=fail]{background:var(--fail);color:#fff}
+.seg button[aria-pressed=true][data-v=skip]{background:var(--skip);color:#fff}
+.seg button[aria-pressed=true][data-v=pend]{background:var(--pend);color:#fff}
+textarea{width:100%;min-height:54px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.tag{font-size:.75rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+.tag.block{border-color:var(--fail);color:var(--fail)}
+.chg{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:8px 0}
+.chg b{display:block}.chg p{margin:4px 0;color:var(--mute);font-size:.92rem}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;background:var(--line);padding:1px 5px;border-radius:4px}
+.r2{margin:12px 0 0;padding:10px 12px;border:1px dashed var(--line);border-radius:8px;background:var(--bg)}
+.r2 h4{margin:10px 0 4px;font-size:.85rem;color:var(--acc);text-transform:uppercase;letter-spacing:.03em}.r2 h4:first-child{margin-top:0}
+.r2 ul{margin:4px 0 0 18px;padding:0}.r2 li{margin:4px 0;font-size:.92rem}.mut{color:var(--mute)}
+.st{font-size:.72rem;padding:1px 8px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}.st.hecho{border-color:var(--ok);color:var(--ok)}.st.accion{border-color:var(--skip);color:var(--skip)}
+.hidden{display:none}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;opacity:0;transition:opacity .2s}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+</head>
+<body>
+<main>
+<h1>Smoke superRestaurant · 2026-11-28</h1>
+<p class="sub">Ronda 2026-11-28 (Ola 7, primer corte cerrado): el resumen del día se descarga en CSV desde /app/reports/day, el ticket promedio ya se calcula en SQL y el proxy de sync valida el scope de cada evento. Pase visual 2/2 con descarga real y migración 20261128000100 aplicada a dev con §19.6. Sigue abierto o5-compras-ui-read (cuenta viewer) y la prueba del operador.</p>
+
+<div class="bar">
+  <div class="prog" id="prog" aria-label="Progreso"></div>
+  <span id="count"></span>
+  <select id="filter" aria-label="Filtrar por estado">
+    <option value="all">Todos</option><option value="pend">Pendientes</option><option value="ok">OK</option><option value="fail">Falla</option><option value="skip">Omitido</option>
+  </select>
+  <button id="export">Exportar</button>
+  <button id="import">Importar</button>
+  <button id="reset">Reiniciar</button>
+  <button id="theme" aria-label="Cambiar tema">◐</button>
+</div>
+
+<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="true" data-tab="smoke">Pruebas</button>
+  <button role="tab" aria-selected="false" data-tab="changes">Cambios recientes</button>
+  <button role="tab" aria-selected="false" data-tab="decisions">Decisiones pendientes</button>
+</div>
+
+<section id="smoke"></section>
+<section id="changes" class="hidden"></section>
+<section id="decisions" class="hidden"></section>
+</main>
+<div id="toast" role="status"></div>
+<input type="file" id="file" accept="application/json" class="hidden">
+
+<script>
+const KEY = "sr-smoke-2026-11-28";
+const SECTIONS = [{"t":"0. Preparación","items":[{"id":"prep-servers","h":"Levantar API y web locales","s":["Define SYNC_CURSOR_SECRET (32+ caracteres) en el entorno del API; sin él la API no arranca","Ejecuta start-local.bat nobuild","Abre la consola del navegador (F12)","Construye shared-types antes de correr el flujo HTTP del API: un dist viejo hace que el parser rechace campos nuevos y el flujo devuelve 503 sin explicar por qué"],"e":"API responde 200 en /api/v1/health y la web abre /login sin errores de consola.","checked":true},{"id":"prep-auth","h":"Sesión de pruebas vigente","s":["node tools/agentic/local-servers/refresh-e2e-session.mjs renueva el storageState sin navegador","Si responde refresh_rejected: pnpm --filter @super-restaurant/web e2e:auth y login manual"],"e":"playwright/.auth/user.json renueva el token (expiresInMinutes=60) y /app no redirige a /login.","checked":true}]},{"t":"1. Migraciones y base","items":[{"id":"mig-preflight","h":"Preflight en solo lectura","s":["Ejecuta el preflight READ_ONLY contra el proyecto de desarrollo al empezar y al cerrar"],"e":"lastRemote=20261126001500, localMissingInRemote solo 20260908000100 (excluida) y remoteMissingLocally las cinco ADR históricas: sin candidatas.","checked":true},{"id":"mig-none","h":"Sin cambios de esquema en este corte","s":["Ningún PR de esta ronda toca supabase/migrations"],"e":"No hubo respaldo, sonda, dry-run ni apply porque no había nada que aplicar.","checked":true}]},{"t":"2. Descarga CSV del día","items":[{"id":"csv-button","h":"El botón existe y se ve","s":["Abre /app/reports/day en escritorio y en 390 px","Mira la cabecera, junto al selector de fecha"],"e":"Hay un botón «Descargar CSV» de al menos 44 px de alto, alcanzable con Tab y con foco visible.","checked":false},{"id":"csv-download","h":"La descarga coincide con la pantalla","s":["Pulsa «Descargar CSV» en un día con movimientos","Abre el archivo y compara la fila «totales» con la tarjeta «Ventas»"],"e":"Se descarga day-summary_<sucursal>_<fecha>_<sello>.csv, la fila totales coincide al centavo con la tarjeta y no hay filas de canal o método en cero.","checked":false},{"id":"csv-empty-day","h":"Un día sin pagos no rompe","s":["Elige una fecha sin movimientos y descarga"],"e":"El archivo trae cabecera y las filas de totales en cero; no hay error ni página vacía.","checked":false},{"id":"csv-limits","h":"Los límites se explican","s":["Pide un rango de dos fechas desde la URL interna o fuerza un día enorme en pruebas"],"e":"Un rango responde 400 con la fecha aceptada; pasar 50 000 filas o 20 MB responde 413 y la pantalla explica que exportes por turno.","checked":false}]},{"t":"2. Compras legibles (viewer y auditor)","items":[{"id":"ui-compras-read","h":"El panel carga con catalog.read y oculta la escritura","s":["Entra a /app/inventario?tab=compras con un rol que solo lea (viewer o auditor)","Comprueba que se ven proveedores, órdenes y el detalle al seleccionar una orden","Confirma que no aparecen «Nuevo proveedor», «Nueva orden» ni «Recibir»"],"e":"Las tres listas cargan, la cabecera dice «Puedes consultar proveedores y órdenes de compra…» y no hay ningún botón de escritura.","block":"Sin cuenta web con rol viewer/auditor en desarrollo: el helper y el API están probados, pero la variante en navegador no se ha visto. El item queda en REVIEW hasta esa pasada."},{"id":"ui-compras-manager","h":"Un encargado no cambia de comportamiento","s":["Entra con owner/admin/manager a la pestaña Compras","Crea un proveedor y abre el diálogo de nueva orden"],"e":"Los tres botones de escritura siguen ahí y la recepción pide almacén y equipo confirmado.","checked":true},{"id":"rbac-single-source","h":"Una sola matriz de permisos","s":["Busca RBAC_ROLE_PERMISSIONS_V1 en el repo"],"e":"La matriz vive en packages/shared-types; apps/api/src/auth/rbac-policy.ts solo la reexporta y ningún otro archivo la vuelve a definir.","checked":true}]},{"t":"3. Pase visual de inventario","items":[{"id":"ui-visual","h":"Seis pestañas en escritorio y móvil","s":["E2E_VISUAL=1 pnpm exec playwright test e2e/visual/inventario.spec.ts --project desktop","Revisa las capturas de la carpeta de la corrida en docs/agentic/"],"e":"12/12 combinaciones (6 pestañas × 1366×800 y 390×844) en verde en 3.1 min: consola y red limpias, sin desbordes ni diálogos nativos.","block":"La spec escribe siempre en docs/agentic/visual-verify-2026-11-26 (carpeta fijada en el código), así que las capturas de esta corrida sustituyen a las del 26 y no se commitearon para no versionar ruido binario.","checked":true}]},{"t":"4. M4 documental","items":[{"id":"m4-metrics","h":"Catálogo de métricas","s":["Abre docs/architecture/metrics-catalog.md","Comprueba que cada fila implementada cita tabla o función real"],"e":"15 métricas con fuente autoritativa, zona horaria, dueño y estado; 5 huecos con tarea sql-* para la Ola 7.","checked":true},{"id":"m4-adr","h":"ADR-014 de exportaciones","s":["Abre docs/adr/ADR-014.md"],"e":"CSV nativo sin dependencias, XLSX con exceljs y PDF con pdfkit, streaming del servidor, límites con números y cinco invariantes.","checked":true}]},{"t":"5. Deudas P3 cerradas","items":[{"id":"p3-invalid-scope","h":"INVALID_SCOPE ya no revoca el equipo","s":["Lee el JSDoc de apps/api/src/sync/sync-merge-executor.ts","Ejecuta pnpm --filter @super-restaurant/api run test"],"e":"El evento con scope mal formado se rechaza por evento (status rejected) y el scope sigue activo; prueba de los cinco códigos en verde.","checked":true},{"id":"p3-capture-args","h":"El verificador de capture exige modo explícito","s":["node --input-type=module -e \"process.argv=['node','x','--bogus']; await import('./apps/api/dist/operations/run-capture-schema-verification.js')\""],"e":"Responde {\"code\":\"CAPTURE_VERIFICATION_ARGUMENTS_REJECTED\",\"stage\":\"arguments\",\"status\":\"failed\"} con salida 1, sin leer configuración ni conectar.","checked":true}]}];
+const R2 = {};
+const STL = {hecho:"Hecho", accion:"Acción tuya"};
+const CHANGES = [{"h":"Descarga CSV del resumen del día","p":"En /app/reports/day, el botón «Descargar CSV» baja day-summary_<sucursal>_<fecha>_<sello>.csv con los totales de la pantalla. El serializador es propio (RFC 4180, sin dependencias) y no calcula nada: escribe lo que el servidor ya calculó. Las filas van agrupadas por sección (total, órdenes, entregas, cancelaciones, canal, método, turno, caja, movimiento) y un día sin pagos da cabecera y cero filas, no un 404."},{"h":"El navegador nunca habla con el API","p":"La descarga pasa por un route handler del propio web que toma la sucursal de la cookie (nunca de la URL), usa la sesión del servidor y reenvía los bytes y el nombre del archivo tal como llegan. El token no sale del servidor y el cliente no reordena ni recalcula importes."},{"h":"Límites declarados antes de exportar","p":"Una sucursal y un día por petición: un rango responde 400 con la fecha aceptada; más de 50 000 filas o 20 MB responde 413 con el conteo y sin archivo parcial; más de 30 s responde 504. El archivo lleva la zona horaria del restaurante en las filas con corte de día."},{"h":"Ticket promedio calculado en SQL","p":"El resumen emite ordersPaid.averageMinor (división entera con redondeo medio hacia arriba y null cuando no hay órdenes pagadas) y la pantalla lo muestra como tarjeta «Ticket promedio». Si el servidor no lo manda, la tarjeta dice «—»: el navegador nunca divide. Migración 20261128000100 aplicada a dev con respaldo, sonda rollback-only, dry-run exacto, apply único, postcheck y segundo dry-run."},{"h":"El proxy de sync revisa cada evento","p":"Antes solo se comparaba el scope declarado del lote contra la cookie; un evento con otra sucursal dentro del mismo push seguía de largo. Ahora se rechaza en el borde con 403 (y 400 si el lote viene mal formado) antes de pedir sesión o autorización, con pruebas del primer y del segundo evento."}];
+const DECISIONS = [{"h":"Un PR para las tres piezas del CSV","p":"El plan pedía uno por tarea, pero el endpoint no compila sin el serializador y la pantalla no existe sin el endpoint. Se revisó cada diff por separado y se fusionó en #160 con CI verde y pase visual."},{"h":"Los invariantes históricos no exigen campos futuros","p":"El archivo de invariantes del resumen se ejecuta en CI justo después de 20261007000500, antes de que exista averageMinor. Se separó un archivo nuevo enganchado a la migración y el histórico compara sin la clave aditiva; exigirla ahí rompía ese punto del historial."},{"h":"La zona de cancelaciones es summary.timeZone","p":"El plan §2.1 trae una «y» suelta en esa celda; se implementó la zona del restaurante, que es lo que significan las demás filas con corte de día. La errata queda anotada en deuda para corregir el documento."},{"h":"La fila turno no inventa fondo","p":"El contrato no expone fondo a nivel de turno (vive en cada caja), así que la celda de importe queda vacía en lugar de escribir 0."},{"h":"Dos motores fallaron por su entorno","p":"codex perdió su ejecutor de comandos a mitad de la ola y dsh murió sin informe cinco veces (dejando el código). El SQL pasó a gemini, el flujo HTTP a dsh y se corrigió un bug del harness que dejaba el prompt de gemini vacío."}];
+const r2html = id => { const r = R2[id]; if (!r) return "";
+  return `<div class="r2"><h4>Cambios realizados</h4><ul>${r.c.map(x => `<li><b>${esc(x[0])}</b> <span class="st ${x[1]}">${STL[x[1]]}</span><br><span class="mut">${esc(x[2])}</span></li>`).join("")}</ul>
+  <h4>Nuevo smoke sugerido</h4><ol class="steps">${r.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol><p class="exp"><b>Esperado:</b> ${esc(r.e)}</p>
+  <h4>Nuevo feedback</h4><textarea data-note="r2-${id}" placeholder="Nuevo feedback de esta ronda: qué viste, qué falta, qué cambiarías">${esc(state["r2-"+id]?.n || "")}</textarea></div>`; };
+const LABELS = {pend:"Pendiente", ok:"OK", fail:"Falla", skip:"Omitido"};
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const all = () => SECTIONS.flatMap(s => s.items);
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render() {
+  const f = document.getElementById("filter").value;
+  document.getElementById("smoke").innerHTML = SECTIONS.map(sec => {
+    const items = sec.items.filter(it => f === "all" || (state[it.id]?.s || "pend") === f);
+    if (!items.length) return "";
+    return `<h2>${esc(sec.t)}</h2>` + items.map(it => {
+      const st = state[it.id]?.s || "pend", note = state[it.id]?.n || "";
+      return `<div class="item" data-s="${st}"><div class="row"><h3>${esc(it.h)}</h3>${it.block ? '<span class="tag block">Bloqueado</span>' : ""}
+        <div class="seg" role="group" aria-label="Estado">${Object.keys(LABELS).map(v => `<button data-id="${it.id}" data-v="${v}" aria-pressed="${st === v}">${LABELS[v]}</button>`).join("")}</div></div>
+        <ol class="steps">${it.s.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+        <p class="exp"><b>Esperado:</b> ${esc(it.e)}</p>${it.block ? `<p class="exp"><b>Bloqueo:</b> ${esc(it.block)}</p>` : ""}
+        <textarea data-note="${it.id}" placeholder="Notas: qué hiciste, qué esperabas, qué viste">${esc(note)}</textarea>${r2html(it.id)}</div>`;
+    }).join("");
+  }).join("");
+  const counts = {pend:0, ok:0, fail:0, skip:0};
+  all().forEach(it => counts[state[it.id]?.s || "pend"]++);
+  const n = all().length;
+  document.getElementById("count").textContent = `${counts.ok} OK · ${counts.fail} falla · ${counts.skip} omitido · ${counts.pend} pendiente`;
+  document.getElementById("prog").innerHTML = ["ok","fail","skip"].map(k => `<i style="width:${counts[k]/n*100}%;background:var(--${k})"></i>`).join("");
+}
+document.getElementById("changes").innerHTML = CHANGES.map(c => `<div class="chg"><b>${esc(c.h)}</b><p>${esc(c.p)}</p></div>`).join("");
+document.getElementById("decisions").innerHTML = DECISIONS.map((c, i) => `<div class="chg"><b>${esc(c.h)}</b><p>${esc(c.p)}</p><textarea data-note="dec-${i}" placeholder="Tu respuesta">${esc(state["dec-"+i]?.n || "")}</textarea></div>`).join("");
+
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-v]");
+  if (b) { state[b.dataset.id] = {...state[b.dataset.id], s: b.dataset.v, t: new Date().toISOString()}; save(); render(); }
+  const tab = ev.target.closest("[role=tab]");
+  if (tab) {
+    document.querySelectorAll("[role=tab]").forEach(x => x.setAttribute("aria-selected", x === tab));
+    ["smoke","changes","decisions"].forEach(id => document.getElementById(id).classList.toggle("hidden", id !== tab.dataset.tab));
+  }
+});
+document.addEventListener("input", ev => {
+  const id = ev.target.dataset.note;
+  if (id) { state[id] = {...state[id], n: ev.target.value}; save(); }
+});
+document.getElementById("filter").onchange = render;
+function toast(m) { const t = document.getElementById("toast"); t.textContent = m; t.style.opacity = 1; setTimeout(() => t.style.opacity = 0, 1800); }
+document.getElementById("export").onclick = async () => {
+  const lines = ["# Resultado smoke 2026-11-28", ""];
+  SECTIONS.forEach(sec => { lines.push("## " + sec.t); sec.items.forEach(it => {
+    const s = state[it.id]?.s || "pend"; lines.push(`- [${LABELS[s]}] ${it.h}${state[it.id]?.n ? " — " + state[it.id].n.replace(/\n/g, " ") : ""}`); if (state["r2-"+it.id]?.n) lines.push(`  - Nuevo feedback: ${state["r2-"+it.id].n.replace(/\n/g, " ")}`); }); lines.push(""); });
+  lines.push("## Decisiones"); DECISIONS.forEach((d, i) => lines.push(`- ${d.h}: ${state["dec-"+i]?.n || "(sin respuesta)"}`));
+  const md = lines.join("\n");
+  try { await navigator.clipboard.writeText(md); toast("Copiado al portapapeles"); } catch (e) { toast("No se pudo copiar"); }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(state, null, 2)], {type: "application/json"}));
+  a.download = "smoke-2026-11-28.json"; a.click();
+};
+document.getElementById("import").onclick = () => document.getElementById("file").click();
+document.getElementById("file").onchange = async ev => {
+  try { state = JSON.parse(await ev.target.files[0].text()); save(); render(); toast("Importado"); } catch (e) { toast("Archivo inválido"); }
+};
+document.getElementById("reset").onclick = () => {
+  const b = document.getElementById("reset");
+  if (b.dataset.armed) { state = {}; save(); render(); delete b.dataset.armed; b.textContent = "Reiniciar"; toast("Reiniciado"); }
+  else { b.dataset.armed = 1; b.textContent = "¿Seguro? Toca otra vez"; setTimeout(() => { delete b.dataset.armed; b.textContent = "Reiniciar"; }, 3000); }
+};
+document.getElementById("theme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+};
+render();
+</script>
+</body>
+</html>
