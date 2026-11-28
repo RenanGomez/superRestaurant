@@ -161,6 +161,9 @@ jobs:
             if [[ "$file" == *20261123000200_customer_open_captures.sql ]]; then
               run_invariant customer_open_captures_invariants.sql
             fi
+            if [[ "$file" == *20261128000100_branch_day_summary_average_ticket.sql ]]; then
+              run_invariant branch_day_summary_average_ticket_invariants.sql
+            fi
           done
       - name: Run SQL tests
         run: |

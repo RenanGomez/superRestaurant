@@ -224,7 +224,7 @@ begin
     {"method":"transfer","paymentCount":1,"amountMinor":2000,"tipMinor":100}]'::jsonb
   then raise exception 'DAY_SUMMARY_BY_METHOD_WRONG %', result->'salesByMethod'; end if;
   -- o1, o2, o5, o10 reached `paid` in the day; o3 is only partially paid; o4/o6/o9 paid outside the day.
-  if result->'ordersPaid' is distinct from '{"count":4,"amountMinor":22600}'::jsonb
+  if ((result->'ordersPaid') - 'averageMinor') is distinct from '{"count":4,"amountMinor":22600}'::jsonb
   then raise exception 'DAY_SUMMARY_ORDERS_PAID_WRONG %', result->'ordersPaid'; end if;
   if result->'deliveryFees' is distinct from '{"orderCount":1,"amountMinor":3000}'::jsonb
   then raise exception 'DAY_SUMMARY_FEES_WRONG %', result->'deliveryFees'; end if;
@@ -291,7 +291,7 @@ begin
   if result->'totals' is distinct from '{"paymentCount":0,"salesMinor":0,"tipsMinor":0,"cashTipsMinor":0}'::jsonb
     or jsonb_array_length(result->'salesByChannel') <> 4 or jsonb_array_length(result->'salesByMethod') <> 3
     or (select sum((e->>'amountMinor')::bigint) from jsonb_array_elements(result->'salesByChannel') e) <> 0
-    or result->'ordersPaid' is distinct from '{"count":0,"amountMinor":0}'::jsonb
+    or ((result->'ordersPaid') - 'averageMinor') is distinct from '{"count":0,"amountMinor":0}'::jsonb
     or result->'deliveryFees' is distinct from '{"orderCount":0,"amountMinor":0}'::jsonb
     or result->'deliveriesSettled' is distinct from '{"count":0,"cashCollectedMinor":0}'::jsonb
     or result->'cancellations' is distinct from '{"orders":0,"captures":0}'::jsonb
@@ -302,7 +302,7 @@ begin
   result := app_private.read_branch_day_summary(u_manager,pg_temp.ds_request(restaurant,branch,'2026-10-04'));
   if result->'totals'->>'salesMinor' <> '7300' or result->'totals'->>'paymentCount' <> '2'
     or result->'cancellations' is distinct from '{"orders":1,"captures":1}'::jsonb
-    or result->'ordersPaid' is distinct from '{"count":2,"amountMinor":7300}'::jsonb
+    or ((result->'ordersPaid') - 'averageMinor') is distinct from '{"count":2,"amountMinor":7300}'::jsonb
     or jsonb_array_length(result->'shifts') <> 1
   then raise exception 'DAY_SUMMARY_PREVIOUS_DAY_WRONG %', result; end if;
 
