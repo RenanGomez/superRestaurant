@@ -60,7 +60,14 @@ export async function GET(request: Request): Promise<Response> {
   const contentDisposition = upstream.headers.get("content-disposition");
   if (contentDisposition !== null) headers.set("content-disposition", contentDisposition);
 
-  return new Response(await upstream.arrayBuffer(), {
+  let body: ArrayBuffer;
+  try {
+    body = await upstream.arrayBuffer();
+  } catch {
+    return new Response(null, { status: 503 });
+  }
+
+  return new Response(body, {
     headers,
     status: upstream.status,
   });

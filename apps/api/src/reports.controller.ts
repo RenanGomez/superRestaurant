@@ -43,7 +43,7 @@ export class ReportsController {
     const dates = typeof query.date === "string" ? query.date.split(",").filter(candidate) : [];
     if (query.from !== undefined || query.to !== undefined || !candidate(query.date) || dates.length !== 1) {
       throw new BadRequestException({ code: "REPORT_EXPORT_RANGE_REJECTED", acceptedDates: dates.slice(0, 1),
-        message: "Una sucursal y un d?a por petici?n." });
+        message: "Una sucursal y un día por petición." });
     }
     if (query.format !== "csv") throw new BadRequestException({ code: "REPORT_EXPORT_FORMAT_REJECTED" });
     const input = { schemaVersion: 1, scope: { restaurantId: query.restaurantId, branchId: query.branchId }, date: query.date };

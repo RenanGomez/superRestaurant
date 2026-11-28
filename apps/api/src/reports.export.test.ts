@@ -1,4 +1,4 @@
-﻿import assert from "node:assert/strict";
+import assert from "node:assert/strict";
 import test from "node:test";
 import { BadRequestException, ForbiddenException, HttpException, type ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
@@ -50,6 +50,7 @@ test("CSV uses serializer, sets download headers and supports BOM", async () => 
     || filename === `attachment; filename="day-summary_${scope.branchId}_${query.date}_${after}.csv"`);
   const metadata = Reflect.getMetadata("__headers__", ReportsController.prototype.exportDaySummary) as { name: string; value: string }[];
   assert.ok(metadata.some((header) => header.name.toLowerCase() === "content-type" && header.value === "text/csv; charset=utf-8"));
+  assert.ok(metadata.some((header) => header.name.toLowerCase() === "cache-control" && header.value === "private, no-store"));
   assert.equal(csv, serializeRfc4180(daySummaryRows(summary)));
   assert.ok(csv.length > 0);
   assert.ok(!csv.startsWith("\uFEFF"));
@@ -71,6 +72,18 @@ test("authorization and invalid requests retain their error codes", async () => 
     error instanceof BadRequestException && (code(error) as { code: string }).code === "REPORT_EXPORT_FORMAT_REJECTED");
   await assert.rejects(controller.exportDaySummary(request, { ...query, restaurantId: "bad" }, response), (error: unknown) =>
     error instanceof BadRequestException && (code(error) as { code: string }).code === "REPORTS_REQUEST_REJECTED");
+});
+
+test("invalid dates never call daySummary", async () => {
+  let calls = 0;
+  const { controller, response } = setup(async () => { calls += 1; return summary; });
+  const request = await authenticatedRequest();
+  for (const date of ["2026-10-05,2026-10-06", "2026-02-31"]) {
+    await assert.rejects(controller.exportDaySummary(request, { ...query, date }, response), (error: unknown) =>
+      error instanceof BadRequestException && error.getStatus() === 400
+      && (code(error) as { code: string }).code === "REPORT_EXPORT_RANGE_REJECTED");
+    assert.equal(calls, 0);
+  }
 });
 
 test("size limits reject without serializing a partial response", () => {
