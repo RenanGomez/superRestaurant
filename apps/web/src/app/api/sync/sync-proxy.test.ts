@@ -15,6 +15,10 @@ function jsonBody(scope: BranchScope): string {
   return JSON.stringify({ protocolVersion: 1, scope });
 }
 
+function pushBody(scope: BranchScope, events: unknown): string {
+  return JSON.stringify({ events, protocolVersion: 1, scope });
+}
+
 function request(
   body: string,
   overrides: { readonly headers?: Record<string, string> } = {},
@@ -110,7 +114,7 @@ test("403 si el scope del cuerpo difiere del scope de la cookie", async () => {
 
 test("401 sin sesión autenticada", async () => {
   const response = await handleSyncProxyRequest(
-    request(jsonBody(scopeA)),
+    request(pushBody(scopeA, [])),
     "push",
     deps({ getSession: () => Promise.resolve(null) }),
   );
@@ -119,7 +123,7 @@ test("401 sin sesión autenticada", async () => {
 
 test("403 cuando la API no autoriza la sucursal", async () => {
   const response = await handleSyncProxyRequest(
-    request(jsonBody(scopeA)),
+    request(pushBody(scopeA, [])),
     "push",
     deps({ authorize: () => Promise.resolve(false) }),
   );
@@ -161,4 +165,107 @@ test("acepta el registro de dispositivos y lo reenvía al API", async () => {
   assert.equal(response.status, 200);
   assert.equal(received?.action, "devices");
   assert.equal(received?.body, body);
+});
+
+test("200 en push cuando todos los eventos pertenecen al scope de la cookie", async () => {
+  let forwardCalls = 0;
+  let forwardedBody: string | undefined;
+  const body = pushBody(scopeA, [
+    { branchId: scopeA.branchId, eventId: "e1", restaurantId: scopeA.restaurantId },
+    { branchId: scopeA.branchId, eventId: "e2", restaurantId: scopeA.restaurantId },
+  ]);
+  const response = await handleSyncProxyRequest(
+    request(body),
+    "push",
+    deps({
+      forward: (input) => {
+        forwardCalls += 1;
+        forwardedBody = input.body;
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      },
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(forwardCalls, 1);
+  assert.equal(forwardedBody, body);
+});
+
+test("403 en push cuando un evento pertenece a otro scope sin llamar a forward", async () => {
+  let forwardCalls = 0;
+  const response = await handleSyncProxyRequest(
+    request(pushBody(scopeA, [{ branchId: scopeB.branchId, restaurantId: scopeB.restaurantId }])),
+    "push",
+    deps({
+      forward: () => {
+        forwardCalls += 1;
+        return Promise.resolve(new Response(null, { status: 200 }));
+      },
+    }),
+  );
+  assert.equal(response.status, 403);
+  assert.equal(forwardCalls, 0);
+});
+
+test("403 en push cuando el segundo evento pertenece a otra rama", async () => {
+  let forwardCalls = 0;
+  const response = await handleSyncProxyRequest(
+    request(
+      pushBody(scopeA, [
+        { branchId: scopeA.branchId, restaurantId: scopeA.restaurantId },
+        { branchId: scopeB.branchId, restaurantId: scopeB.restaurantId },
+      ]),
+    ),
+    "push",
+    deps({
+      forward: () => {
+        forwardCalls += 1;
+        return Promise.resolve(new Response(null, { status: 200 }));
+      },
+    }),
+  );
+  assert.equal(response.status, 403);
+  assert.equal(forwardCalls, 0);
+});
+
+test("400 en push cuando events no es un array", async () => {
+  const response = await handleSyncProxyRequest(
+    request(JSON.stringify({ events: "x", scope: scopeA })),
+    "push",
+    deps(),
+  );
+  assert.equal(response.status, 400);
+});
+
+test("403 en push cuando un evento no es un objeto", async () => {
+  for (const malformedEvents of [[null], ["x"]]) {
+    let forwardCalls = 0;
+    const response = await handleSyncProxyRequest(
+      request(pushBody(scopeA, malformedEvents)),
+      "push",
+      deps({
+        forward: () => {
+          forwardCalls += 1;
+          return Promise.resolve(new Response(null, { status: 200 }));
+        },
+      }),
+    );
+    assert.equal(response.status, 403);
+    assert.equal(forwardCalls, 0);
+  }
+});
+
+test("200 en snapshot con el cuerpo sin events", async () => {
+  let receivedAction: string | undefined;
+  const response = await handleSyncProxyRequest(
+    request(jsonBody(scopeA)),
+    "snapshot",
+    deps({
+      forward: (input) => {
+        receivedAction = input.action;
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      },
+    }),
+  );
+  assert.equal(response.status, 200);
+  assert.equal(receivedAction, "snapshot");
 });
