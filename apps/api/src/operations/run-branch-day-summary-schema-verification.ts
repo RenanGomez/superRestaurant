@@ -115,6 +115,10 @@ try {
   if (!existsSync(averageTicketMigrationPath)) throw new Error("LOCAL_AVERAGE_TICKET_MIGRATION_MISSING");
   const averageTicketSql = readFileSync(averageTicketMigrationPath, "utf8");
   const invariantsSql = readFileSync(join(root, "supabase", "tests", "branch_day_summary_invariants.sql"), "utf8");
+  const averageTicketInvariantsSql = readFileSync(
+    join(root, "supabase", "tests", "branch_day_summary_average_ticket_invariants.sql"),
+    "utf8",
+  );
   // Regression: the payment and cash reports that share the tables are untouched by this additive candidate.
   const regressionSql = ["cash_transfer_method_invariants.sql"]
     .map((name) => readFileSync(join(root, "supabase", "tests", name), "utf8"));
@@ -125,6 +129,10 @@ try {
   let migrationFailure: unknown;
   try {
     await admin.query(extractMigrationBody(candidateSql));
+    // Historical branch_day_summary invariants run right after 20261007000500 (same point in history as CI).
+    await admin.query("SAVEPOINT invariant_file");
+    await admin.query(extractMigrationBody(invariantsSql));
+    await admin.query("ROLLBACK TO SAVEPOINT invariant_file");
     await admin.query(extractMigrationBody(averageTicketSql));
     migrated = (await admin.query(SUMMARY_SQL)).rows[0];
     // Only app_api executes the new reader; nobody else (and no client role) can.
@@ -138,7 +146,7 @@ try {
     assert.deepEqual(unknown.rows[0]?.result, { status: "denied" });
     assert.equal((await admin.query("select to_regclass('app.payments_branch_captured_idx') is not null as present")).rows[0]?.present, true);
     // Each file defines its own pg_temp helpers: isolate them with a savepoint so names cannot collide.
-    for (const sql of [invariantsSql, ...regressionSql]) {
+    for (const sql of [averageTicketInvariantsSql, ...regressionSql]) {
       await admin.query("SAVEPOINT invariant_file");
       await admin.query(extractMigrationBody(sql));
       await admin.query("ROLLBACK TO SAVEPOINT invariant_file");
