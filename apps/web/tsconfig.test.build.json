@@ -124,6 +124,8 @@
     "src/lib/finance.test.ts",
     "src/lib/day-summary.ts",
     "src/lib/day-summary.test.ts",
+    "src/lib/report-export.ts",
+    "src/lib/report-export.test.ts",
     "src/lib/ui-classes.ts",
     "src/lib/class-conflicts.ts",
     "src/lib/class-conflicts.test.ts",
