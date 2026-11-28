@@ -10,6 +10,7 @@ import { BRANCH_PREFERENCE_COOKIE, findMembership, parseBranchPreference } from 
 import { readDaySummary } from "../../../../lib/reports";
 import { getRequestSession, getRequestMemberships, getRequestAuthorizedBranch } from "../../../../lib/request-context";
 import { selectSummaryDateAction } from "./actions";
+import { ReportExportButton } from "./report-export-button";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export default async function DaySummaryPage({ searchParams }: PageProps): Promi
   ]);
   const date = rawDate !== undefined && isCalendarDate(rawDate) ? rawDate : timeZone === undefined ? undefined : todayInZone(new Date(), timeZone);
 
-  const shell = (children: ReactNode): ReactNode => (
+  const shell = (children: ReactNode, allowExport = true): ReactNode => (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 sm:p-5 lg:p-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
@@ -50,22 +51,24 @@ export default async function DaySummaryPage({ searchParams }: PageProps): Promi
           <Field id="day-summary-date" className="flex flex-col gap-1 text-[12px] font-semibold text-text-muted" hint="Día del que quieres ver el resumen de ventas, en la zona horaria del restaurante." label="Fecha"><input id="day-summary-date" type="date" name="date" required defaultValue={date ?? ""} className={`min-h-11 rounded-xl border border-border bg-surface px-3 text-[14px] text-text ${FOCUS}`} /></Field>
           <button type="submit" className={`min-h-11 rounded-xl bg-accent px-4 text-[14px] font-semibold text-white ${FOCUS}`}>Ver</button>
         </form>
+        {date !== undefined && allowExport && <ReportExportButton date={date} />}
       </div>
       {invalidDate && <p role="alert" className="rounded-xl border border-border bg-error-bg p-3 text-[13px]">La fecha no es válida. Elige otra.</p>}
       {children}
     </div>
   );
-  const message = (title: string, body: string, retry = true): ReactNode => shell(
+  const message = (title: string, body: string, retry = true, allowExport = true): ReactNode => shell(
     <div role="alert" className="rounded-2xl border border-border bg-surface p-6">
       <p className="font-heading text-[16px] font-semibold">{title}</p>
       <p className="mt-1 text-[13px] text-text-muted">{body}</p>
       {retry && <a href={date === undefined ? "/app/reports/day" : `/app/reports/day?date=${date}`} className={`mt-4 inline-flex min-h-11 items-center rounded-xl bg-accent px-4 text-[14px] font-semibold text-white ${FOCUS}`}>Reintentar</a>}
     </div>,
+    allowExport,
   );
 
   if (date === undefined) return message("No se pudo cargar la sucursal", "No se obtuvo la zona horaria. No se registró ningún cambio.");
   const result = requestedSummary ?? await readDaySummary(session.access_token, env.apiBaseUrl, scope, date);
-  if (result.status === "unauthorized") return message("Sin permiso de reportes", "Tu rol actual no puede ver el resumen del día en esta sucursal.", false);
+  if (result.status === "unauthorized") return message("Sin permiso de reportes", "Tu rol actual no puede ver el resumen del día en esta sucursal.", false, false);
   if (result.status !== "ok") return message("No se pudo cargar el resumen", "El servicio no respondió con datos válidos. Reintenta en un momento.");
   const view = buildDaySummaryView(result.value);
 
