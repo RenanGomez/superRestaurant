@@ -22,6 +22,17 @@ function reject(status: number): Response {
   return new Response(null, { status });
 }
 
+function hasMatchingEventScope(event: unknown, scope: BranchScope): boolean {
+  if (typeof event !== "object" || event === null || Array.isArray(event)) return false;
+  const candidate = event as { readonly restaurantId?: unknown; readonly branchId?: unknown };
+  return (
+    typeof candidate.restaurantId === "string"
+    && typeof candidate.branchId === "string"
+    && candidate.restaurantId === scope.restaurantId
+    && candidate.branchId === scope.branchId
+  );
+}
+
 /**
  * Pure request pipeline of `POST /api/sync/{push|pull|snapshot}`.
  *
@@ -37,8 +48,10 @@ function reject(status: number): Response {
  * 5. real `Buffer.byteLength(body)` too large â†’ 413 (header can lie);
  * 6. malformed JSON/scope â†’ 400;
  * 7. body scope different from the cookie scope â†’ 403;
- * 8. no session â†’ 401;
- * 9. API denies the scope â†’ 403.
+ * 8. `push` with non-array `events` â†’ 400, or any event outside the cookie
+ *    scope â†’ 403;
+ * 9. no session â†’ 401;
+ * 10. API denies the scope â†’ 403.
  */
 export async function handleSyncProxyRequest(
   request: Request,
@@ -81,6 +94,14 @@ export async function handleSyncProxyRequest(
     || cookieScope.branchId !== bodyScope.branchId
   ) {
     return reject(403);
+  }
+
+  if (action === "push") {
+    const events = (body as { readonly events?: unknown }).events;
+    if (!Array.isArray(events)) return reject(400);
+    for (const event of events) {
+      if (!hasMatchingEventScope(event, cookieScope)) return reject(403);
+    }
   }
 
   const session = await deps.getSession();
