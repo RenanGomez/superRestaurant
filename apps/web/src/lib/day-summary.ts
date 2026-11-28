@@ -55,6 +55,7 @@ export function buildDaySummaryView(summary: BranchDaySummaryV1): DaySummaryView
     ({ amount: money(source.amountMinor), count: source.paymentCount, key, label, tip: money(source.tipMinor) });
   const time = (iso: string | null): string => iso === null ? "—" : formatOrderWorkTime(iso, summary.timeZone);
   const { totals, cancellations } = summary;
+  const averageMinor = summary.ordersPaid.averageMinor;
   return Object.freeze({
     cards: [
       { detail: `${plural(totals.paymentCount, "pago", "pagos")} · ${plural(summary.ordersPaid.count, "orden pagada", "órdenes pagadas")}`, key: "sales", label: "Ventas", value: money(totals.salesMinor) },
@@ -63,6 +64,11 @@ export function buildDaySummaryView(summary: BranchDaySummaryV1): DaySummaryView
       { detail: cancellations.refundPendingMinor > 0
         ? `${plural(cancellations.captures, "captura cerrada", "capturas cerradas")} · Devoluciones pendientes ${money(cancellations.refundPendingMinor)}`
         : plural(cancellations.captures, "captura cerrada", "capturas cerradas"), key: "cancelled", label: "Canceladas", value: plural(cancellations.orders, "orden", "órdenes") },
+      {
+        detail: typeof averageMinor === "number" ? "Promedio por orden pagada"
+          : averageMinor === null ? "Sin órdenes pagadas" : "Sin dato del servidor",
+        key: "average", label: "Ticket promedio", value: typeof averageMinor === "number" ? money(averageMinor) : "—",
+      },
     ],
     channels: summary.salesByChannel.map((entry) => row(entry.channel, CHANNEL_LABELS[entry.channel], entry)),
     empty: totals.paymentCount === 0 && summary.shifts.length === 0 && cancellations.orders === 0 && cancellations.captures === 0,

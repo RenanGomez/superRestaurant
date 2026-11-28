@@ -89,6 +89,20 @@ for (const bad of [
   { captures: 1, orders: 1, extra: 1 },
 ]) expect(parseBranchDaySummaryV1({ ...summary, cancellations: bad }) === undefined, `cancellations reject ${JSON.stringify(bad)}`);
 
+// Additive `ordersPaid.averageMinor`: optional on parse so older producers stay valid across a release.
+expect(parsed !== undefined && !Object.hasOwn(parsed.ordersPaid, "averageMinor"), "missing averageMinor stays absent");
+const withAverage = parseBranchDaySummaryV1({ ...summary, ordersPaid: { amountMinor: 100002, averageMinor: 33334, count: 3 } });
+expect(withAverage !== undefined && withAverage.ordersPaid.averageMinor === 33334 && withAverage.ordersPaid.count === 3,
+  "averageMinor is kept");
+const nullAverage = parseBranchDaySummaryV1({ ...summary, ordersPaid: { amountMinor: 22600, averageMinor: null, count: 4 } });
+expect(nullAverage !== undefined && nullAverage.ordersPaid.averageMinor === null, "null averageMinor is kept");
+for (const averageMinor of [-1, 1.5, "33334", Number.MAX_SAFE_INTEGER + 2]) {
+  expect(parseBranchDaySummaryV1({ ...summary, ordersPaid: { amountMinor: 22600, averageMinor, count: 4 } }) === undefined,
+    `ordersPaid rejects averageMinor ${String(averageMinor)}`);
+}
+expect(parseBranchDaySummaryV1({ ...summary, ordersPaid: { amountMinor: 22600, averageMinor: 5650, count: 4 },
+  totals: { ...summary.totals, salesMinor: 24601 } }) === undefined, "coherence still fails closed with averageMinor");
+
 // An empty day is all zeros, never null.
 const empty = {
   ...summary,
