@@ -89,8 +89,11 @@ export interface BranchDaySummaryV1 {
   readonly salesByChannel: readonly BranchDaySummaryChannelSalesV1[];
   readonly salesByMethod: readonly BranchDaySummaryMethodSalesV1[];
   readonly totals: BranchDaySummaryTotalsV1;
-  /** Orders that reached paid/closed with their last payment in the day; amount excludes tips. */
-  readonly ordersPaid: { readonly count: number; readonly amountMinor: number };
+  /**
+   * Orders that reached paid/closed with their last payment in the day; amount excludes tips.
+   * `averageMinor` is optional on parse so producers older than the field stay valid across a release.
+   */
+  readonly ordersPaid: { readonly count: number; readonly amountMinor: number; readonly averageMinor?: number | null };
   /** Frozen delivery charge of those paid Orders. */
   readonly deliveryFees: { readonly orderCount: number; readonly amountMinor: number };
   readonly deliveriesSettled: { readonly count: number; readonly cashCollectedMinor: number };
@@ -127,7 +130,7 @@ export function parseBranchDaySummaryV1(value: unknown): BranchDaySummaryV1 | un
   const salesByChannel = parseSales(own(record, "salesByChannel"), "channel", BRANCH_DAY_SUMMARY_CHANNELS);
   const salesByMethod = parseSales(own(record, "salesByMethod"), "method", BRANCH_DAY_SUMMARY_METHODS);
   const totals = parseTotals(own(record, "totals"));
-  const ordersPaid = parsePair(own(record, "ordersPaid"), "count", "amountMinor");
+  const ordersPaid = parseOrdersPaid(own(record, "ordersPaid"));
   const deliveryFees = parsePair(own(record, "deliveryFees"), "orderCount", "amountMinor");
   const deliveriesSettled = parsePair(own(record, "deliveriesSettled"), "count", "cashCollectedMinor");
   const cancellations = parseCancellations(own(record, "cancellations"));
@@ -148,8 +151,8 @@ export function parseBranchDaySummaryV1(value: unknown): BranchDaySummaryV1 | un
     || cashTips !== totals.cashTipsMinor
     || !Number.isSafeInteger(totals.salesMinor + totals.tipsMinor)
     || (deliveryFees.second > 0 && deliveryFees.first < 1)
-    || deliveryFees.first > ordersPaid.first
-    || (ordersPaid.first > 0 && ordersPaid.second < 1)) return undefined;
+    || deliveryFees.first > ordersPaid.count
+    || (ordersPaid.count > 0 && ordersPaid.amountMinor < 1)) return undefined;
   return Object.freeze({
     cancellations: Object.freeze({
       captures: cancellations.captures, orders: cancellations.orders, refundPendingMinor: cancellations.refundPendingMinor,
@@ -157,7 +160,7 @@ export function parseBranchDaySummaryV1(value: unknown): BranchDaySummaryV1 | un
     currency, date,
     deliveriesSettled: Object.freeze({ cashCollectedMinor: deliveriesSettled.second, count: deliveriesSettled.first }),
     deliveryFees: Object.freeze({ amountMinor: deliveryFees.second, orderCount: deliveryFees.first }),
-    ordersPaid: Object.freeze({ amountMinor: ordersPaid.second, count: ordersPaid.first }),
+    ordersPaid: Object.freeze(ordersPaid),
     salesByChannel, salesByMethod,
     schemaVersion: BRANCH_DAY_SUMMARY_SCHEMA_VERSION, scope,
     shifts: Object.freeze(shifts as BranchDaySummaryShiftV1[]), timeZone, totals,
@@ -200,6 +203,23 @@ function parsePair(value: unknown, first: string, second: string): { first: numb
   const a = record === undefined ? undefined : money(own(record, first));
   const b = record === undefined ? undefined : money(own(record, second));
   return a === undefined || b === undefined ? undefined : { first: a, second: b };
+}
+
+/**
+ * `averageMinor` is additive: a producer older than the field omits it and the key stays absent.
+ * When present it must be null or a non-negative safe integer; the quotient is never recomputed here.
+ */
+function parseOrdersPaid(value: unknown): { count: number; amountMinor: number; averageMinor?: number | null } | undefined {
+  const withAverage = value !== null && typeof value === "object" && !Array.isArray(value)
+    && Reflect.ownKeys(value).length === 3 && Reflect.ownKeys(value).includes("averageMinor");
+  const record = exactRecord(value, withAverage ? ["count", "amountMinor", "averageMinor"] : ["count", "amountMinor"]);
+  const count = record === undefined ? undefined : money(own(record, "count"));
+  const amountMinor = record === undefined ? undefined : money(own(record, "amountMinor"));
+  if (count === undefined || amountMinor === undefined) return undefined;
+  if (!withAverage) return { amountMinor, count };
+  const rawAverage = own(record as PlainRecord, "averageMinor");
+  const averageMinor = rawAverage === null ? null : money(rawAverage);
+  return averageMinor === undefined ? undefined : { amountMinor, averageMinor, count };
 }
 
 /** `refundPendingMinor` is additive: a producer older than 20261007000700 omits it and it reads as 0. */

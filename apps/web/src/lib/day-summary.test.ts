@@ -44,7 +44,7 @@ const norm = (text: string): string => text.replace(/ /gu, " ");
 test("the view shows the server's figures in pesos without recomputing", () => {
   const view = buildDaySummaryView(summary);
   assert.equal(view.salesTotal, "$1,200.00");
-  assert.deepEqual(view.cards.map((card) => card.value), ["$1,200.00", "$50.00", "$35.00", "2 órdenes"]);
+  assert.deepEqual(view.cards.map((card) => card.value), ["$1,200.00", "$50.00", "$35.00", "2 órdenes", "—"]);
   assert.deepEqual(view.channels.map((row) => row.label), ["Mesa", "Mostrador", "Para llevar", "Entrega a domicilio"]);
   assert.equal(view.cards[3]?.detail, "1 captura cerrada · Devoluciones pendientes $55.00");
   assert.equal(view.methods[1]?.amount, "$200.00");
@@ -56,6 +56,18 @@ test("the view shows the server's figures in pesos without recomputing", () => {
   );
   assert.deepEqual(shift?.movements.map(norm), ["Salida (2): −$50.00"]);
   assert.equal(view.empty, false);
+});
+
+test("the average ticket card only shows the server's figure", () => {
+  const card = (s: BranchDaySummaryV1) => buildDaySummaryView(s).cards.find((entry) => entry.key === "average");
+  const withNumber = { ...summary, ordersPaid: { amountMinor: 120000, averageMinor: 60000, count: 2 } } as unknown as BranchDaySummaryV1;
+  assert.deepEqual([card(withNumber)?.label, card(withNumber)?.value, card(withNumber)?.detail],
+    ["Ticket promedio", "$600.00", "Promedio por orden pagada"]);
+  assert.equal(buildDaySummaryView(withNumber).cards[0]?.detail, "2 pagos · 2 órdenes pagadas");
+  const withNull = { ...summary, ordersPaid: { amountMinor: 0, averageMinor: null, count: 0 } } as unknown as BranchDaySummaryV1;
+  assert.deepEqual([card(withNull)?.value, card(withNull)?.detail], ["—", "Sin órdenes pagadas"]);
+  const absent = { ...summary, ordersPaid: { amountMinor: 120000, count: 2 } } as unknown as BranchDaySummaryV1;
+  assert.deepEqual([card(absent)?.value, card(absent)?.detail], ["—", "Sin dato del servidor"]);
 });
 
 test("an empty day is flagged", () => {
