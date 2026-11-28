@@ -20,7 +20,7 @@ serializados.
 ARRANQUE (no leas archivos de más de 300 líneas)
 
 1. Lee `HANDOFF.md` (primera entrada), `docs/plans/plan-2026-11-29-ola8-rango-y-formatos.md` (completo),
-   `docs/architecture/metrics-catalog.md` (filas de ticket promedio y ventas), `docs/agentic/status.md`,
+   `docs/architecture/metrics-catalog.md` (filas de ticket promedio y ventas), `docs/agentic/status.md`, `docs/agentic/debt.md` (últimas entradas),
    `DECISIONS_PENDING.md` y `docs/agentic/backlog.json` (solo items que no estén `done`).
 2. Verifica con `git log --oneline -5`, `git status` y `gh pr list --state open`.
 3. Preflight READ_ONLY de apertura (URL en `SCHEMA_VERIFICATION_DATABASE_URL`, CA absoluta, nunca imprimir la
@@ -58,15 +58,17 @@ CORTE 1 DE LA OLA 8 (una sesión)
 |---|---|---|---|---|
 | 1 | `rep-range-summary` | A | codex | migración nueva, `packages/shared-types/src/reports.ts`, invariantes SQL, verificador, `ci.yml` |
 | 2 | `spike-report-tax-sources` | B | gemini | `docs/architecture/report-tax-sources.md` (solo lectura) |
+| 2b | `fix-csv-ticket-null` | B | dsh | `apps/api/src/reports/export/csv.ts` + `csv.test.ts` (`ticket=null` → vacío) |
+| 2c | `o7-p3-items-42501` | B | dsh | brief existente en `.agents/briefs/` |
 | 3 | `rep-range-endpoint` | B | codex | `reports.controller.ts`, `reports.ts`, `reports.range.test.ts` |
 | 4 | `rep-export-range-csv` | B | dsh | `reports/export/csv.ts` + test |
 | 5 | `rep-screen-range` | C | gemini | `apps/web/src/app/app/reports/day/page.tsx`, `lib/day-summary.ts` |
 
-Lanzamiento en tres tiempos: **(A)** #1 codex + #2 gemini en paralelo · **(B)** con #1 fusionado, #3 codex +
+Lanzamiento en tres tiempos: **(A)** #1 codex + #2 gemini + #2b y #2c dsh en paralelo (#2b se fusiona antes que #4) · **(B)** con #1 fusionado, #3 codex +
 #4 dsh · **(C)** con #3 fusionado, #5 gemini y el pase visual.
 
 Contrato exacto (`plan-2026-11-29-ola8-rango-y-formatos.md` §2): `BranchRangeSummaryV1` con `days[]` del
-resumen diario existente, `totals` sumados **en SQL**, `averageMinor` calculado en SQL, 31 días máximo,
+resumen diario existente, `totals` sumados **en SQL** (incluye `ordersPaidAmountMinor`), `averageMinor` calculado en SQL sobre `ordersPaidAmountMinor` (misma fórmula del día, NO sobre `salesMinor`), sin campo `truncated`, 31 días máximo,
 `400 REPORT_RANGE_REJECTED` con `{ from, to, maxDays }`, y parser que falla cerrado con totales incoherentes
 o días no consecutivos. El CSV del rango lleva `fecha` como primera columna y el archivo diario **no cambia**.
 Nadie reinventa el contrato: se cita el plan en cada brief.

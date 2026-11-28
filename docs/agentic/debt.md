@@ -211,3 +211,7 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
   sin impacto en producto.
 - **2026-11-26 · decision rechazada de conceder DML directo a `app_api`** — registro historico; prevalece
   ADR-013 §13.
+- **2026-11-28 · P2 Ola 7 `csv.ts` escribe `ticket=null`** — `averageTicket` solo trata `undefined`; el SQL
+  devuelve `null` con cero órdenes pagadas. Se cierra con `fix-csv-ticket-null` (Ola 8, tiempo A).
+- **2026-11-28 · P3 el resumen del día recorta a 50 turnos sin bandera** — `limit 50` en
+  `20261007000700`; ni el día ni el rango avisan. Abrir tarea si un restaurante supera 50 turnos al día.
