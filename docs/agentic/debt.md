@@ -11,6 +11,22 @@ Barrido: 2026-11-26 (Ola 4, nivel D). Las entradas resueltas por los PR de la Ol
 
 ## Activa — muerde hoy
 
+### Ola 7 (2026-11-28)
+- **P2 - el mismo `42501` sigue mapeado a 403 en movimientos, compras, recetas y costos** - solo
+  `inventory/items.service.ts` distingue `INVENTORY_ACTOR_FORBIDDEN` del `permission denied` real; en los
+  otros cuatro servicios un grant retirado se presenta como "no autorizado". Dueño: API/inventario.
+  Accion: replicar el helper de `items.service.ts` con su prueba por servicio.
+- **P3 - errata del plan §2.1 en la columna `zona` de `cancelaciones`** - el plan trae `y` en esa celda;
+  se implementa `summary.timeZone` (decision registrada en HANDOFF 2026-11-28). Dueño: orquestador.
+  Accion: corregir el plan en la proxima edicion para que el documento y el codigo digan lo mismo.
+- **P3 - la fila `turno` del CSV deja `importe` vacio** - el contrato no expone fondo a nivel de turno
+  (`openingFloatMinor` vive en cada caja). No se inventa `0`. Dueño: SQL/reportes. Accion: si se quiere el
+  fondo del turno, exponerlo en `BranchDaySummaryV1` con su migracion; mientras tanto la celda queda vacia.
+- **P3 - `sql-average-ticket` obliga a tocar el verificador del resumen** - el verificador
+  `verify:branch-day-summary-schema:rollback` solo probaba la candidata de 20261007000500; aplicar la
+  migracion nueva despues exige editar un archivo de operaciones. Dueño: API. Accion: si aparece otra
+  migracion del resumen, parametrizar la lista de candidatas en vez de encadenar aplicaciones.
+
 ### Dinero y operacion
 - **P2 · validacion de montos en zonas/entrega (`m3-rev-zonas`)** — `20261123000500` no valida
   incondicionalmente la paridad de moneda de `capture_delivery_manual_fees` y `frozen_quote` contra
