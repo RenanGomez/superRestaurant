@@ -310,7 +310,7 @@ Bug SQL candidato corregido y verificado rollback-only: coordenadas de Address/f
 ## Fase 5 — Gestión, CRM y personal
 
 - [ ] **TODO · P5** — Implementar dashboard gerencial y operativo reconciliable con órdenes/pagos.
-- [ ] **TODO · P5** — Implementar reportes y exportación Excel/PDF por Restaurant/Branch/canal/zona.
+- [~] **IN_PROGRESS · P5** — Reportes con rango y exportación (CSV del día entregado en la Ola 7; XLSX/PDF y filtros en curso). Plan: `docs/plans/plan-2026-11-29-ola8-rango-y-formatos.md`.
 - [ ] **TODO · P5** — Extender clientes con consentimiento, segmentación, preferencias y lealtad sobre el directorio operativo de P2.
 - [ ] **TODO · P5** — Implementar empleados, asistencia, comisiones y desempeño.
 - [ ] **TODO · P5** — Implementar rentabilidad por canal, producto, zona y repartidor.

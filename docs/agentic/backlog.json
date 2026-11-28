@@ -1,9 +1,9 @@
 {
   "version": "2.0.0",
   "milestone": "M2/ola-0",
-  "updatedAt": "2026-11-28",
+  "updatedAt": "2026-11-29",
   "source": "docs/plans/plan-deepseek-fases-3-8.md",
-  "notes": "Ola 7, primer corte cerrado: exportación CSV del día (#160), ticket promedio en contrato, pantalla y SQL (#161, #162, migración 20261128000100 aplicada a dev) y proxy de sync con scope por evento (#163). Pendientes: la cuenta viewer/auditor de o5-compras-ui-read, o7-p3-items-42501 y la prueba del operador.",
+  "notes": "Ola 8 planificada en docs/plans/plan-2026-11-29-ola8-rango-y-formatos.md: corte 1 (periodo: SQL, contrato, endpoints, CSV y pantalla + spike fiscal), corte 2 (XLSX, PDF y filtros) y corte 3 (reembolsos, bloqueado por DECISIONS_PENDING.md). Ola 7 cerrada (#160-#165) con la migración 20261128000100 aplicada a dev.",
   "items": [
     {
       "id": "m1-z2b-confirm-pizza-v2",
@@ -2215,6 +2215,303 @@
       "pr": null,
       "parent": "debt",
       "note": "Brief escrito (.agents/briefs/o7-p3-items-42501.md); no se abrió en esta sesión para no mezclar con la ola de reportes."
+    },
+    {
+      "id": "rep-range-summary",
+      "title": "Agregado SQL del periodo y contrato BranchRangeSummaryV1",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "supabase/migrations/20261129000100_branch_range_summary.sql",
+        "packages/shared-types/src/reports.ts",
+        "supabase/tests/branch_range_summary_invariants.sql",
+        "apps/api/src/operations/run-branch-day-summary-schema-verification.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "deps": [
+        "sql-average-ticket"
+      ],
+      "acceptance": [
+        "days[] viene de la función del día, ascendente y sin huecos; totals es la suma exacta",
+        "averageMinor del rango se calcula en SQL con redondeo medio hacia arriba y null sin órdenes pagadas",
+        "más de 31 días inclusivos -> 400 REPORT_RANGE_REJECTED con { from, to, maxDays }",
+        "el parser falla cerrado con totals incoherente o días no consecutivos"
+      ],
+      "etaMin": 90,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Contrato fijado en docs/plans/plan-2026-11-29-ola8-rango-y-formatos.md §2.1. Una migración para el corte 1."
+    },
+    {
+      "id": "rep-range-endpoint",
+      "title": "Endpoints del periodo: JSON y export CSV",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "apps/api/src/reports.controller.ts",
+        "apps/api/src/reports.ts",
+        "apps/api/src/reports.range.test.ts"
+      ],
+      "deps": [
+        "rep-range-summary"
+      ],
+      "acceptance": [
+        "POST /reports/branch-range devuelve BranchRangeSummaryV1 sin recalcular",
+        "GET /reports/branch-range/export con content-disposition range-summary_<branch>_<from>_<to>_<UTC>.csv",
+        "mismos códigos que el export del día (400/403/413/504)"
+      ],
+      "etaMin": 60,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": ""
+    },
+    {
+      "id": "rep-export-range-csv",
+      "title": "CSV del periodo sobre el serializador de la Ola 7",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "dsh",
+      "paths": [
+        "apps/api/src/reports/export/csv.ts",
+        "apps/api/src/reports/export/csv.test.ts"
+      ],
+      "deps": [
+        "rep-range-summary"
+      ],
+      "acceptance": [
+        "cabecera fecha,seccion,concepto,zona,moneda,importe,conteo,detalle y filas por día en orden",
+        "bloque rango,totales con el total del periodo",
+        "el archivo diario sigue con siete columnas"
+      ],
+      "etaMin": 45,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": ""
+    },
+    {
+      "id": "rep-screen-range",
+      "title": "Pantalla de reportes con selector de periodo",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "C",
+      "lane": "gemini",
+      "paths": [
+        "apps/web/src/app/app/reports/day/page.tsx",
+        "apps/web/src/lib/day-summary.ts"
+      ],
+      "deps": [
+        "rep-range-endpoint"
+      ],
+      "acceptance": [
+        "hoy, ayer, últimos 7 días, mes en curso y rango explícito; los números vienen del servidor",
+        "tabla por día y descarga del CSV del periodo con estado y error accesibles",
+        "pase visual 1366x800 y 390x844 con consola y red limpias"
+      ],
+      "etaMin": 60,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Sin filtros de canal/método: van en el corte 2."
+    },
+    {
+      "id": "spike-report-tax-sources",
+      "title": "Spike de fuentes de impuestos y descuentos en los snapshots",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "gemini",
+      "paths": [
+        "docs/architecture/report-tax-sources.md"
+      ],
+      "deps": [],
+      "acceptance": [
+        "mapa con archivo:línea de orders.aggregate y snapshots de línea sobre descuentos, impuestos y cortesías",
+        "un payload real de ejemplo",
+        "veredicto hay datos / faltan datos"
+      ],
+      "etaMin": 45,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Solo lectura. Sin veredicto no se abre rep-gross-net-tax."
+    },
+    {
+      "id": "rep-export-xlsx",
+      "title": "Exportación XLSX del periodo con exceljs",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "gemini",
+      "paths": [
+        "apps/api/src/reports/export/xlsx.ts",
+        "apps/api/package.json"
+      ],
+      "deps": [
+        "rep-export-range-csv"
+      ],
+      "acceptance": [
+        "hojas Resumen, Por día, Canales, Métodos, Turnos y Movimientos",
+        "una prueba lee el libro de vuelta y cada celda monetaria es entero",
+        "totales iguales al CSV del mismo periodo"
+      ],
+      "etaMin": 90,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Corte 2: no empieza hasta que el CSV del rango esté en main."
+    },
+    {
+      "id": "rep-export-pdf",
+      "title": "Exportación PDF imprimible del periodo con pdfkit",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "apps/api/src/reports/export/pdf.ts",
+        "apps/api/package.json"
+      ],
+      "deps": [
+        "rep-export-range-csv"
+      ],
+      "acceptance": [
+        "%PDF-1.7 con portada (sucursal, rango, zona, generación) y una tabla por día",
+        "los totales aparecen literalmente en el texto",
+        "segunda y última dependencia de exportación"
+      ],
+      "etaMin": 90,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Corte 2."
+    },
+    {
+      "id": "rep-export-filters",
+      "title": "Filtros de canal y método en servidor sobre el periodo",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "B",
+      "lane": "codex",
+      "paths": [
+        "supabase/migrations",
+        "apps/api/src/reports.ts",
+        "apps/web/src/app/app/reports/day/page.tsx"
+      ],
+      "deps": [
+        "rep-range-endpoint"
+      ],
+      "acceptance": [
+        "channels y methods se aplican en SQL y totals se recalcula allí",
+        "la pantalla no filtra ni suma importes",
+        "filtrar por cash da una suma coherente y distinta"
+      ],
+      "etaMin": 75,
+      "attempts": 0,
+      "status": "todo",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Corte 2; si necesita migración, es la del corte 2."
+    },
+    {
+      "id": "adr-016-refunds",
+      "title": "ADR-016: reembolso ejecutado, tabla inmutable y obligación pendiente",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "D",
+      "lane": "gemini",
+      "paths": [
+        "docs/adr/ADR-016.md"
+      ],
+      "deps": [],
+      "acceptance": [
+        "distingue obligación pendiente de reembolso ejecutado y fija quién puede ejecutarlo",
+        "alternativas descartadas con motivo",
+        "sin decisión de Emmanuel el ADR queda como propuesta y no se implementa"
+      ],
+      "etaMin": 45,
+      "attempts": 0,
+      "status": "blocked",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Bloqueado por DECISIONS_PENDING.md §1: registrar o anotar, y qué rol."
+    },
+    {
+      "id": "sql-refunds-table",
+      "title": "Tabla app.refunds inmutable y record_order_refund idempotente",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "supabase/migrations",
+        "supabase/tests"
+      ],
+      "deps": [
+        "adr-016-refunds"
+      ],
+      "acceptance": [
+        "sin UPDATE ni DELETE (trigger 42501) y escritura solo por función app_private",
+        "idempotente por (order_id, idempotency_key): doble envío no duplica",
+        "reembolso sin obligación -> 409 con código propio"
+      ],
+      "etaMin": 90,
+      "attempts": 0,
+      "status": "blocked",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Bloqueado por la decisión; migración propia del corte 3."
+    },
+    {
+      "id": "rep-refunds-field",
+      "title": "Reembolsos ejecutados en el resumen del día y del rango",
+      "milestone": "M4",
+      "phase": 5,
+      "level": "A",
+      "lane": "codex",
+      "paths": [
+        "packages/shared-types/src/reports.ts",
+        "supabase/migrations"
+      ],
+      "deps": [
+        "sql-refunds-table"
+      ],
+      "acceptance": [
+        "cancellations.refundedMinor y refunds { count, amountMinor } en día y rango",
+        "reconciliación refundPendingMinor + refundedMinor <= capturado de las canceladas",
+        "el reporte cuadra con la tabla sin tolerancia"
+      ],
+      "etaMin": 75,
+      "attempts": 0,
+      "status": "blocked",
+      "sessionId": null,
+      "pr": null,
+      "parent": "O8",
+      "note": "Bloqueado por la decisión."
     }
   ]
 }

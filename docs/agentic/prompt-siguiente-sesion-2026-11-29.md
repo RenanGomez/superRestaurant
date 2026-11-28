@@ -1,5 +1,9 @@
 # Prompt para la siguiente sesión (Ola 7 orquestando codex + gemini + dsh)
 
+> **Superado.** La Ola 7 está cerrada; el prompt vigente es
+> `docs/agentic/prompt-siguiente-sesion-2026-11-29-ola8.md` y el plan es
+> `docs/plans/plan-2026-11-29-ola8-rango-y-formatos.md`.
+
 Copia el bloque siguiente como primer mensaje de la conversación nueva.
 
 ---
