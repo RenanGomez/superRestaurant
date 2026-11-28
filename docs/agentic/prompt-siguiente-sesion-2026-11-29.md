@@ -1,31 +1,50 @@
-# Prompt para la siguiente sesión (compras legibles, matriz RBAC y arranque de M4)
+# Prompt para la siguiente sesión (Ola 7 orquestando codex + gemini + dsh)
 
 Copia el bloque siguiente como primer mensaje de la conversación nueva.
 
 ---
 
-Eres el orquestador de superRestaurant (POS multi-sucursal). Esta sesión es solo dsh (DeepSeek vía
-OpenCode Go): Codex y Gemini están sin cuota. No uses codex, gemini ni subagentes Claude como worker.
+Eres el **orquestador** de superRestaurant (POS multi-sucursal). Tu trabajo en esta sesión es planificar,
+repartir, integrar, ejecutar puertas y documentar. **No escribes código de producto**: lo escriben los tres
+motores, que tienen cuota — **codex**, **gemini (CLI `agy`)** y **dsh (DeepSeek)**. Si te ves escribiendo un
+`.ts`/`.tsx` de producto, párate: eso va a un motor con brief.
 
-ARRANQUE (no leas archivos de más de 300 líneas)
+## 0. Regla de orquestación (no negociable)
 
-1. Lee `HANDOFF.md` (2 primeras entradas), `docs/plans/plan-2026-11-27-ola6-compras-m4.md` (completo),
-   `docs/agentic/status.md` y `docs/agentic/backlog.json` (solo items que no estén `done`).
-2. Verifica con `git log --oneline -5`, `git status`, `gh pr list --state open`.
-3. Levanta el stack solo si vas a verificar UI: `tools\agentic\local-servers\start-local.bat nobuild`
-   **con** `SYNC_CURSOR_SECRET` (≥32) en el entorno; sin él la API no arranca
-   (`SyncCursor` lanza `SYNC_CURSOR_SECRET_INVALID`). Nunca imprimas el secreto.
+- **Los tres motores trabajan en cada ola.** Con tres o más tareas, cada motor recibe al menos una que escriba
+  código. Nunca todo a dsh.
+- **Reparto por especialidad:** codex → dinero, SQL, estado, sync y bugs duros · gemini → UI, visual y piezas
+  medianas con contexto amplio · dsh → tests, mecánicos, documentos y piezas pequeñas.
+- **Lanzamiento:** siempre `.harness/bin/agent.ps1 -Engine <codex|gemini|dsh> -Id <id> -Write -Worktree`
+  (sin `-Write` es solo lectura). Antes de lanzar, escribe en una línea el reparto:
+  `codex: A · gemini: B · dsh: C, D`.
+- **Revisión cruzada:** el diff de un motor lo revisa **otro** motor distinto, en solo lectura. P1 se corrige
+  antes del merge; P2/P3 van a `docs/agentic/debt.md`. Nada de merge con P1 abierto.
+- **Un escritor por archivo.** Los compartidos se serializan: `apps/api/package.json`,
+  `apps/api/src/app.module.ts`, `apps/api/src/reports.ts`, `apps/api/src/reports.controller.ts`,
+  `packages/shared-types/src/reports.ts`, `apps/web/src/app/app/reports/day/page.tsx`,
+  `apps/web/package.json` y `supabase/migrations` (una migración por ola como máximo).
+- **Contrato antes de código:** si dos tareas comparten un tipo, el contrato lo fija el brief antes de que
+  nadie escriba. Nada de campos que la base no tiene.
 
-Estado esperado: `main` en `a9eaa60c` o posterior; Ola 5 fusionada (#138–#149); dev en
-`20261126001500`; **M2 cerrado en su alcance técnico** (puertas humanas aparte: dispositivo real,
-impresora, ASAP 15/30); M3 al 100 % del alcance fusionado. La prueba del operador sigue pendiente: no
-muevas filas de «Día operable» a DONE.
+## 1. Arranque (no leas archivos de más de 300 líneas)
 
-PASO 0 OBLIGATORIO — PREFLIGHT READ_ONLY
+1. Lee `HANDOFF.md` (primera entrada), `docs/plans/plan-2026-11-28-etapa-fase5.md` (mapa de olas) y
+   `docs/plans/plan-2026-11-28-ola7-exportaciones.md` (el corte que toca ahora), `docs/agentic/status.md` y
+   `docs/agentic/backlog.json` (solo items que no estén `done`).
+2. Verifica con `git log --oneline -5`, `git status` y `gh pr list --state open`.
+3. Si vas a verificar UI: `tools\agentic\local-servers\start-local.bat nobuild` **con** `SYNC_CURSOR_SECRET`
+   (≥32) en el entorno; nunca imprimas el secreto. Si la sesión de Playwright tiene más de una hora,
+   `node tools/agentic/local-servers/refresh-e2e-session.mjs`.
 
-Dos trampas ya pagadas: la URL va en `SCHEMA_VERIFICATION_DATABASE_URL` (no en `ADR010_DATABASE_URL`),
-hay que quitarle la query y recortar las comillas del `.env`; y la ruta de la CA debe ser **absoluta**
-porque `pnpm --filter` ejecuta con cwd `apps/api`. Nunca imprimas la cadena ni el certificado.
+Estado esperado: `main` en `ba6230fd` o posterior; dev en `20261126001500`; Olas 0–6 fusionadas (#151–#158);
+`o5-compras-ui-read` en REVIEW por la cuenta `viewer`; `metrics-catalog.md`, `ADR-014.md` y el plan de etapa ya
+en el repo. La prueba del operador sigue pendiente: no muevas filas de «Día operable» a DONE.
+
+## 2. PASO 0 — preflight READ_ONLY (apertura y cierre)
+
+La URL va en `SCHEMA_VERIFICATION_DATABASE_URL` (no en `ADR010_DATABASE_URL`), sin query y sin comillas; la CA
+absoluta. Nunca imprimas la cadena ni el certificado.
 
 ```powershell
 . .\tools\agentic\use-node24.ps1; $ErrorActionPreference='Continue'
@@ -39,44 +58,94 @@ $env:SCHEMA_VERIFICATION_CA_CERT_PATH="$root\.certs\prod-ca-2021.crt"
 pnpm --filter @super-restaurant/api run preflight:migrations
 ```
 
-Esperado: `lastRemote=20261126001500` y `localMissingInRemote` solo `20260908000100` (excluida; no
-toques el historial). Cualquier otra candidata exige el protocolo §19.6 completo (sonda rollback-only,
-respaldo schema-only verificado, dry-run exacto, apply único, postcheck, segundo dry-run). El staging
-temporal excluye `20260908000100` y reproduce las cinco ADR históricas; `supabase db push` se lanza con
-`--db-url` del pooler (IPv4) leído del `.env`, nunca impreso.
+> El `project ref` correcto es el del `.env`; si no coincide con `zwbyiefqeujstyzysydn`, **detente** y dilo.
 
-TRABAJO DE LA SESIÓN, en este orden (detalle en el plan §1–§3)
+Esperado: `lastRemote=20261126001500` y `localMissingInRemote` solo `20260908000100`. Cualquier otra candidata
+exige §19.6 completo (sonda rollback-only, respaldo schema-only verificado, dry-run exacto, apply único,
+postcheck y segundo dry-run).
 
-1. **Matriz RBAC compartida** (B, 20 min): mover `RBAC_ROLE_PERMISSIONS_V1` y `rolesGrantPermission` de
-   `apps/api/src/auth/rbac-policy.ts` a `packages/shared-types`, reexportarlos desde el API y dejar los
-   tests de ambos verdes. Objetivo: que el web no copie listas de roles.
-2. **`o5-compras-ui-read`** (C, 45–60 min): helper `inventory-access.ts` (`canReadPurchases` /
-   `canManagePurchases`), prop `canRead` desde `page.tsx` al workspace y al panel; cargar proveedores,
-   órdenes y detalle con `canRead`; dejar solo las acciones de escritura detrás de `canManage` (la
-   recepción sigue exigiendo además `deviceStatus === "ready"`). Prueba del helper con los ocho roles de
-   `catalog.read` y las negativas de `kitchen`/`courier`.
-   - Pase visual: `E2E_VISUAL=1 playwright test e2e/visual/inventario.spec.ts --project desktop` con la
-     sesión vigente. Si caducó: `pnpm --filter @super-restaurant/web e2e:auth` (login manual; los
-     servidores deben estar arriba). Para ver la variante `viewer`/`auditor` hace falta una cuenta con
-     ese rol; si no la hay, documenta la brecha y deja el item en REVIEW.
-3. **M4 documental** (D, 60–90 min): `m4-metrics-catalog` (`docs/architecture/metrics-catalog.md`) y
-   `m4-adr-014-exports` (`docs/adr/ADR-014.md`), con el criterio del plan §2.
-4. **Si sobra tiempo:** P3 del plan §3 (`INVALID_SCOPE`, `correlationId` por evento, argumentos del
-   verificador de capture, `42501` en `items.service.ts`). Uno por PR pequeño.
-5. **Cierre** (tú, D): HANDOFF, `status.md`, `backlog.json`, `debt.md` y smoke; preflight final.
+## 3. Reparto de esta sesión (Ola 7)
 
-PUERTAS (todas antes de DONE)
+| # | Tarea | Nivel | Motor | Archivos | Depende de |
+|---|---|---|---|---|---|
+| 1 | `o5-compras-ui-read` | C | **gemini** (pase) | `docs/agentic/visual-verify-*/`, HANDOFF | decisión de Emmanuel |
+| 2 | `report-export-csv` | B | **dsh** | `apps/api/src/reports/export/csv.ts` + test | — |
+| 3 | `report-export-endpoint` | B | **codex** | `apps/api/src/reports.controller.ts`, `reports.export.test.ts` | — |
+| 4 | `report-export-web` | C | **gemini** | `apps/web/src/app/api/reports/day-summary/export/route.ts`, `lib/report-export.ts`, `reports/day/page.tsx` | 3 fusionado |
+| 5 | `sql-average-ticket` | A | **codex** | `packages/shared-types/src/reports.ts`, `supabase/migrations/<nueva>`, `apps/api/src/reports.ts`, `reports/day/page.tsx` | 4 fusionado |
 
-- `pnpm --filter @super-restaurant/web run test|lint|typecheck|build|e2e:typecheck` en 0.
-- Pase visual de inventario 12/12 con consola y red limpias (nunca `alert/confirm/prompt`).
-- Un PR por tarea, CI verde (Verify, PostgreSQL, Playwright) y revisión por un motor distinto al que
-  escribió; si no hay cuota para otra familia, regístralo en HANDOFF y haz una segunda pasada del diff.
-- `git diff --check` en docs; smoke regenerado si hubo UI.
+**Lanzamiento en dos tiempos** (respetando dependencias y archivos compartidos):
 
-REGLAS QUE NO SE RELAJAN
+- **Tiempo A (paralelo):** #2 dsh + #3 codex. Archivos disjuntos salvo `apps/api/package.json`: **solo #2 lo
+  toca**; si #3 también necesita registrar un test, que el brief lo prohíba y el integrador añade la línea.
+- **Tiempo B:** #4 gemini (necesita el endpoint), #1 gemini en paralelo si Emmanuel ya decidió la cuenta.
+- **Tiempo C:** #5 codex (comparte `page.tsx` con #4; se hace después).
+- **Revisión cruzada:** codex revisa el diff de dsh (#2); gemini revisa el de codex (#3 y #5); dsh revisa el
+  de gemini (#4), que es pequeño. Un revisor por diff, en solo lectura.
 
-- Un escritor por archivo; los compartidos (`inventory-workspace.tsx`, `purchasing-panel.tsx`,
-  `actions.ts`, `package.json`, `supabase/migrations`) en una sola tarea por ola.
+El contrato exacto del CSV (columnas, orden, escapado, nombres de archivo, límites y códigos de error) está en
+`docs/plans/plan-2026-11-28-ola7-exportaciones.md` §2 y §3. **El brief lo cita; nadie lo reinventa.**
+
+## 4. Si la Ola 7 se cierra con tiempo
+
+Abre la Ola 8 con estas tres, en paralelo y con archivos disjuntos:
+
+| Tarea | Nivel | Motor | Nota |
+|---|---|---|---|
+| `rep-range-summary` | A | **codex** | función SQL de rango + contrato `BranchRangeSummaryV1`; §19.6 si hay migración |
+| `spike-report-tax-sources` | B | **gemini** | solo lectura: qué guardan los snapshots sobre descuentos e impuestos; media página en `docs/architecture/report-tax-sources.md` |
+| `o7-p2-sync-proxy-scope` | B | **dsh** | validar el scope por evento en `apps/web/src/app/api/sync/sync-proxy.ts` con prueba |
+
+No abras `rep-gross-net-tax` sin el veredicto del spike, ni XLSX/PDF antes de que el CSV esté en `main`.
+
+## 5. Cómo escribir el brief (plantilla obligatoria)
+
+Cada brief va en `.agents/briefs/<id>.md` y contiene, en este orden:
+
+1. **Alcance:** qué archivos puede tocar y cuáles no («solo estos»).
+2. **Contexto mínimo:** el fragmento exacto (firma, líneas, contrato) y la ruta; sin «explora el repo».
+3. **Cambio exacto:** qué función/columna/pantalla, con nombres reales.
+4. **Hecho cuando:** comandos verificables (`pnpm --filter … run test`), con la salida esperada.
+5. **Reglas:** no commit, no push, no Supabase, sin `alert/confirm/prompt`, sin cálculo de dinero en cliente.
+6. **Informe:** ruta del reporte y máximo 15 líneas con un bloque de salida real (evidencia literal).
+
+Añade siempre: «Si `pnpm` no resuelve en tu worktree por falta de `node_modules`, dilo con el error literal y
+entrega el diff; el orquestador corre las puertas.»
+
+## 6. Puertas (todas antes de DONE)
+
+- `pnpm --filter` del alcance en `test`, `lint`, `typecheck`, `build` y `e2e:typecheck` en 0; `shared-types
+  build` antes del `typecheck` del API.
+- El CSV exportado cuadra con `POST /reports/day-summary` del mismo día; ningún importe con `NaN`, punto
+  decimal ni notación científica; el XLSX/PDF (cuando toque) se lee de vuelta.
+- CI verde (Verify, PostgreSQL, Playwright) en cada PR + revisión cruzada por otra familia + cero P1 abiertos.
+- Pase visual con navegador real en 1366×800 y 390×844, consola y red limpias, sin `alert/confirm/prompt`.
+- `git diff --check` en docs y smoke regenerado con lo realmente visto.
+
+## 7. Lecciones del corte anterior (no las repitas)
+
+- Los worktrees de los motores **no tienen `node_modules`**: `pnpm` intenta instalar y la red del sandbox
+  rechaza. Las puertas las corre el orquestador en el repo principal.
+- dsh puede morir sin informe dejando el código: revisa el worktree, integra y verifica; si no hay código,
+  reintenta en **otro** motor.
+- `git switch`/`git checkout` en PowerShell aborta el script al escribir en stderr: usa
+  `$ErrorActionPreference='Continue'` o `cmd /c` por comando. Para commits, mensaje en archivo + `git commit -F`.
+- Conflictos del script `test` de `apps/api/package.json`: conservar **ambas** entradas nuevas.
+- El repo versiona CRLF en docs sin `.gitattributes`: `git config core.whitespace cr-at-eol` en local antes de
+  `git diff --check`.
+
+## 8. Cierre (tú, nivel D)
+
+HANDOFF (entrada del corte con reparto, decisiones, puertas y desviaciones), `status.md`, `backlog.json`,
+`debt.md`, smoke del día si hubo UI y prompt de la siguiente sesión; preflight final. **Sin workers vivos ni
+PRs abiertos al cerrar**; si queda trabajo delegado sin integrar, dilo explícito en el último mensaje.
+
+## 9. Reglas que no se relajan
+
+- Nada de cálculo de dinero, promedios ni permisos en la web: el servidor manda, el cliente formatea.
 - No editar migraciones aplicadas. Nada de datos reales sin respaldo y alcance por ids.
 - Nada de «Día operable» a DONE sin la prueba del operador (D1–D7, T1–T4, seis pestañas).
-- Sin workers vivos ni PRs abiertos al cerrar; si queda trabajo delegado sin integrar, dilo explícito.
+- `o5-compras-ui-read` solo pasa a DONE con la variante `viewer`/`auditor` vista en navegador **o** con la
+  decisión explícita de Emmanuel registrada.
+- Si una ola pasa de dos sesiones o acumula dos P1 en el mismo archivo, se cierra con lo verde y lo pendiente
+  arranca la ola siguiente con su id.
