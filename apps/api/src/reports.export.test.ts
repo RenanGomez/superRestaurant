@@ -2,14 +2,15 @@
 import test from "node:test";
 import { BadRequestException, ForbiddenException, HttpException, type ExecutionContext } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import type { BranchDaySummaryV1 } from "@super-restaurant/shared-types";
+import { parseBranchScope, type BranchDaySummaryV1 } from "@super-restaurant/shared-types";
 
 import { SupabaseAuthGuard } from "./auth/authentication.js";
 import { ReportsController, assertExportSize } from "./reports.controller.js";
 import { daySummaryRows, serializeRfc4180 } from "./reports/export/csv.js";
 import { ReportsError, type ReportsService } from "./reports.js";
 
-const scope = { restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" };
+const scope = parseBranchScope({ restaurantId: "1e37ae13-8507-484c-969f-2176f77b7000", branchId: "23723e10-c0bf-49fd-9363-4f0e2c60e955" });
+if (scope === undefined) throw new Error("TEST_SCOPE_INVALID");
 const query = { ...scope, date: "2026-10-05", format: "csv" };
 const summary: BranchDaySummaryV1 = {
   schemaVersion: 1, scope, date: query.date, timeZone: "America/Hermosillo", currency: "MXN",
@@ -20,9 +21,9 @@ const summary: BranchDaySummaryV1 = {
 };
 
 async function authenticatedRequest(): Promise<object> {
-  const request = { headers: { authorization: "Bearer test-token" }, ip: "127.0.0.1" };
+  const request = { headers: { authorization: `Bearer ${"t".repeat(40)}` }, ip: "127.0.0.1" };
   const guard = new SupabaseAuthGuard({ verifyAccessToken: async () => ({ actorId: "aa9a25b7-3c6a-4c0e-8f2e-9e4c5a6b7c8d" }) }, new Reflector());
-  await guard.canActivate({ getHandler: () => authenticatedRequest, getClass: () => ReportsController,
+  await guard.canActivate({ getHandler: () => ReportsController.prototype.exportDaySummary, getClass: () => ReportsController,
     switchToHttp: () => ({ getRequest: () => request }) } as unknown as ExecutionContext);
   return request;
 }
