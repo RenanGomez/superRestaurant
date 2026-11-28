@@ -63,10 +63,10 @@ export interface BranchRangeSummaryV1 {
     readonly tipsMinor: number;
     readonly cashTipsMinor: number;
     readonly paymentCount: number;
-    readonly ordersPaid: number;      // conteo de órdenes pagadas del periodo
+    readonly ordersPaid: number;      // suma de days[].ordersPaid.count
+    readonly ordersPaidAmountMinor: number; // suma de days[].ordersPaid.amountMinor (sin propinas)
     readonly averageMinor: number | null;
   };
-  readonly truncated: boolean;        // true si algún día recortó turnos por el tope de 50
 }
 ```
 
@@ -76,9 +76,13 @@ Reglas (no negociables):
   función del día). La función del rango solo itera, suma y valida; si un día responde `denied`, `rejected`
   o `conflict`, el rango responde igual y no inventa ceros.
 - `days` va **ascendente** y sin huecos: un día sin movimientos es un día válido con ceros.
-- `totals.salesMinor/tipsMinor/cashTipsMinor/paymentCount/ordersPaid` son sumas de `days[]`.
-- `totals.averageMinor` se calcula **en SQL**: `null` si `ordersPaid = 0`; si no, división entera `bigint`
-  medio hacia arriba sobre `totals.salesMinor`.
+- `totals.salesMinor/tipsMinor/cashTipsMinor/paymentCount/ordersPaid/ordersPaidAmountMinor` son sumas de `days[]`.
+- `totals.averageMinor` se calcula **en SQL** con la **misma fórmula del día** (`ordersPaid.amountMinor /
+  ordersPaid.count`, catálogo de métricas): `null` si `ordersPaid = 0`; si no, división entera `bigint` medio
+  hacia arriba sobre `totals.ordersPaidAmountMinor`. **No** se usa `salesMinor` (son pagos del día, no el
+  importe de las órdenes pagadas: dos definiciones distintas darían un ticket del rango distinto del del día).
+- **Sin `truncated`.** El resumen del día recorta en silencio a 50 turnos (`limit 50`) y no expone bandera; el
+  rango hereda ese tope. Se registra como deuda y no se inventa una señal nueva en esta migración.
 - `from`/`to` inválidos, `from > to` o más de **31 días inclusivos** → `400 REPORT_RANGE_REJECTED` con
   `{ from, to, maxDays: 31 }`.
 - `reports.read` en la sucursal exacta; sucursal ajena → `403 ACTION_NOT_AUTHORIZED` (lo decide el servicio,
@@ -88,7 +92,7 @@ Reglas (no negociables):
   (sin tolerancia). Un `totals` incoherente invalida el rango entero.
 
 Hecho cuando: los invariantes prueban dos días con pagos distintos (suma exacta), un día sin pagos en medio
-(no rompe la suma), `averageMinor` de rango con 3 órdenes y venta `100001` → `33334`, y el rechazo de 32
+(no rompe la suma), `averageMinor` de rango con 3 órdenes y `ordersPaidAmountMinor` `100001` → `33334`, y un caso donde `salesMinor` ≠ `ordersPaidAmountMinor` que prueba que el promedio usa el segundo, y el rechazo de 32
 días. El verificador aplica la migración nueva tras la del día y queda `status=ok` con `local_cleanup
 stopped=true`.
 
@@ -127,11 +131,14 @@ cálculo); si el tiempo crece, se optimiza en una migración posterior, no dupli
   bloque de una fila:
 
   ```
-  rango,totales,,<timeZone>,<currency>,<totals.salesMinor>,<totals.paymentCount>,propinas=<totals.tipsMinor>;efectivo=<totals.cashTipsMinor>;ordenes_pagadas=<totals.ordersPaid>;ticket=<averageMinor o vacio>
+  rango,totales,,<timeZone>,<currency>,<totals.salesMinor>,<totals.paymentCount>,propinas=<totals.tipsMinor>;efectivo=<totals.cashTipsMinor>;ordenes_pagadas=<totals.ordersPaid>;ticket=<averageMinor, vacío si es null>
   ```
 
 - El archivo diario **no cambia** (siete columnas, sin `fecha`) para no romper lo ya entregado.
-- `truncated: true` añade al final `rango,truncado,,...` con `detalle=algún_día_recortó_turnos`.
+- **Prerrequisito (bug de Ola 7, tarea `fix-csv-ticket-null`, dsh):** `daySummaryRows` escribe `ticket=null`
+  cuando el SQL devuelve `averageMinor: null` (solo trata `undefined`), y la prueba solo cubre la clave
+  ausente. Se corrige a vacío para `null` y `undefined`, con prueba del caso `null`, **antes** de
+  extender el serializador; el bloque `rango` usa la misma regla.
 - Hecho cuando: dos días producen primero las filas del día 1 y después las del día 2, en orden, y el bloque
   `rango` coincide **sin tolerancia** con `POST /reports/branch-range`; un día vacío en medio no altera la
   suma; el escapado RFC 4180 sigue probado.
@@ -165,7 +172,7 @@ cambios de contrato en la misma migración.
 - `exceljs` como **única** dependencia nueva en `apps/api` (ADR-014 §2). Hojas `Resumen`, `Por día`,
   `Canales`, `Métodos`, `Turnos`, `Movimientos`.
 - Streaming (`WorkbookWriter`) por encima de 2 000 filas; por debajo, buffer permitido.
-- Importes como entero con formato `#,##0` y moneda en columna aparte; ni un float.
+- Importes como entero **en unidad menor** (centavos) con encabezado explícito «importe (centavos)» y moneda en columna aparte; ni un float ni formato `#,##0` que aparente pesos.
 - Hecho cuando: una prueba lee el XLSX de vuelta con la propia librería, cada celda monetaria es entero y los
   totales coinciden con el CSV del mismo periodo.
 
@@ -211,8 +218,8 @@ Un escritor por archivo y los compartidos serializados. Archivos compartidos de 
 `apps/web/package.json`, `.github/workflows/ci.yml` y `supabase/migrations` (**una por corte**).
 
 **Corte 1, tiempo A (paralelo):** codex → `rep-range-summary` (2.1, dueño de contrato, migración, verificador
-y hook de CI) · gemini → `spike-report-tax-sources` (2.5, solo lectura) · dsh → sin código todavía (el
-serializador depende del contrato).
+y hook de CI) · gemini → `spike-report-tax-sources` (2.5, solo lectura) · dsh → `fix-csv-ticket-null` (2.3,
+prerrequisito, solo `csv.ts` y su prueba) y `o7-p3-items-42501` (brief ya escrito, inventario).
 
 **Corte 1, tiempo B (paralelo, con 2.1 fusionado):** codex → `rep-range-endpoint` (2.2) · dsh →
 `rep-export-range-csv` (2.3) · gemini → prepara el brief de pantalla leyendo la pantalla actual.
