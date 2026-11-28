@@ -110,6 +110,10 @@ try {
   } finally { await admin.query("ROLLBACK"); }
 
   const candidateSql = readFileSync(join(migrations, candidateName), "utf8");
+  // Applies the additive sql-average-ticket migration right after the candidate in the same rollback transaction.
+  const averageTicketMigrationPath = join(migrations, "20261128000100_branch_day_summary_average_ticket.sql");
+  if (!existsSync(averageTicketMigrationPath)) throw new Error("LOCAL_AVERAGE_TICKET_MIGRATION_MISSING");
+  const averageTicketSql = readFileSync(averageTicketMigrationPath, "utf8");
   const invariantsSql = readFileSync(join(root, "supabase", "tests", "branch_day_summary_invariants.sql"), "utf8");
   // Regression: the payment and cash reports that share the tables are untouched by this additive candidate.
   const regressionSql = ["cash_transfer_method_invariants.sql"]
@@ -121,6 +125,7 @@ try {
   let migrationFailure: unknown;
   try {
     await admin.query(extractMigrationBody(candidateSql));
+    await admin.query(extractMigrationBody(averageTicketSql));
     migrated = (await admin.query(SUMMARY_SQL)).rows[0];
     // Only app_api executes the new reader; nobody else (and no client role) can.
     assert.deepEqual((await admin.query(READER_SQL)).rows[0], {

@@ -92,6 +92,9 @@ declare
   o8 uuid := gen_random_uuid();
   o9 uuid := gen_random_uuid();
   o10 uuid := gen_random_uuid();
+  o_avg1 uuid := gen_random_uuid();
+  o_avg2 uuid := gen_random_uuid();
+  o_avg3 uuid := gen_random_uuid();
   p1 uuid := gen_random_uuid();
   p10 uuid := gen_random_uuid();
   mem uuid;
@@ -102,6 +105,10 @@ declare
   reg_row jsonb;
   plan_line record;
   plan_uses_index boolean := false;
+  avg_day text;
+  avg_count bigint;
+  avg_amount bigint;
+  avg_minor bigint;
 begin
   if creator is null then raise exception 'DAY_SUMMARY_TEST_ACTOR_REQUIRED'; end if;
   insert into app.restaurants(id,name,time_zone) values
@@ -171,6 +178,13 @@ begin
   values (restaurant,branch,o10,u_courier,'settled','2026-10-05T21:00:00Z','2026-10-05T21:10:00Z',1,'2026-10-05T21:50:00Z',
     p10,'2026-10-05T22:00:00Z',3500,creator,creator);
 
+  insert into app.order_cancellations(restaurant_id,branch_id,order_id,event_id,from_status,result_version,reason,
+    actor_id,device_id,occurred_at,received_at,refund_obligation_status,captured_minor,captured_tip_minor,currency) values
+    (restaurant,branch,o7,gen_random_uuid(),'open',2,'cliente desistio',creator,
+      '00000000-0000-4000-8000-0000000000d5'::uuid,'2026-10-05T16:00:00Z','2026-10-05T16:00:00Z','none',0,0,'MXN'),
+    (restaurant,branch,o8,gen_random_uuid(),'open',2,'cliente desistio',creator,
+      '00000000-0000-4000-8000-0000000000d5'::uuid,'2026-10-04T16:00:00Z','2026-10-04T16:00:00Z','none',0,0,'MXN');
+
   insert into app.capture_drafts(id,restaurant_id,branch_id,folio,source_channel,status,attention_status,recovery_expires_at,
     created_by,updated_by,created_at,updated_at) values
     (gen_random_uuid(),restaurant,branch,'DS-NOSALE-1','phone','no_sale','unclaimed','2026-10-12T00:00:00Z',creator,creator,
@@ -224,13 +238,13 @@ begin
     {"method":"transfer","paymentCount":1,"amountMinor":2000,"tipMinor":100}]'::jsonb
   then raise exception 'DAY_SUMMARY_BY_METHOD_WRONG %', result->'salesByMethod'; end if;
   -- o1, o2, o5, o10 reached `paid` in the day; o3 is only partially paid; o4/o6/o9 paid outside the day.
-  if result->'ordersPaid' is distinct from '{"count":4,"amountMinor":22600}'::jsonb
+  if result->'ordersPaid' is distinct from '{"count":4,"amountMinor":22600,"averageMinor":5650}'::jsonb
   then raise exception 'DAY_SUMMARY_ORDERS_PAID_WRONG %', result->'ordersPaid'; end if;
   if result->'deliveryFees' is distinct from '{"orderCount":1,"amountMinor":3000}'::jsonb
   then raise exception 'DAY_SUMMARY_FEES_WRONG %', result->'deliveryFees'; end if;
   if result->'deliveriesSettled' is distinct from '{"count":1,"cashCollectedMinor":3500}'::jsonb
   then raise exception 'DAY_SUMMARY_SETTLED_WRONG %', result->'deliveriesSettled'; end if;
-  if result->'cancellations' is distinct from '{"orders":1,"captures":1}'::jsonb
+  if result->'cancellations' is distinct from '{"orders":1,"captures":1,"refundPendingMinor":0}'::jsonb
   then raise exception 'DAY_SUMMARY_CANCELLATIONS_WRONG %', result->'cancellations'; end if;
   -- Sales by channel and by method both add up to the total.
   if (select sum((e->>'amountMinor')::bigint) from jsonb_array_elements(result->'salesByChannel') e) <> 24600
@@ -280,7 +294,7 @@ begin
   -- ---- Isolation: the sibling Branch's own manager and the foreign manager see zeros, never this Branch's money.
   result := app_private.read_branch_day_summary(u_other_branch,pg_temp.ds_request(restaurant,branch_b,'2026-10-05'));
   if result->'totals'->>'salesMinor' <> '0' or jsonb_array_length(result->'shifts') <> 0
-    or result->'cancellations' is distinct from '{"orders":0,"captures":0}'::jsonb
+    or result->'cancellations' is distinct from '{"orders":0,"captures":0,"refundPendingMinor":0}'::jsonb
   then raise exception 'DAY_SUMMARY_SIBLING_LEAK %', result; end if;
   result := app_private.read_branch_day_summary(u_foreign,pg_temp.ds_request(other_restaurant,other_branch,'2026-10-05'));
   if result->'totals'->>'salesMinor' <> '0' or jsonb_array_length(result->'shifts') <> 0
@@ -291,18 +305,18 @@ begin
   if result->'totals' is distinct from '{"paymentCount":0,"salesMinor":0,"tipsMinor":0,"cashTipsMinor":0}'::jsonb
     or jsonb_array_length(result->'salesByChannel') <> 4 or jsonb_array_length(result->'salesByMethod') <> 3
     or (select sum((e->>'amountMinor')::bigint) from jsonb_array_elements(result->'salesByChannel') e) <> 0
-    or result->'ordersPaid' is distinct from '{"count":0,"amountMinor":0}'::jsonb
+    or result->'ordersPaid' is distinct from '{"count":0,"amountMinor":0,"averageMinor":null}'::jsonb
     or result->'deliveryFees' is distinct from '{"orderCount":0,"amountMinor":0}'::jsonb
     or result->'deliveriesSettled' is distinct from '{"count":0,"cashCollectedMinor":0}'::jsonb
-    or result->'cancellations' is distinct from '{"orders":0,"captures":0}'::jsonb
+    or result->'cancellations' is distinct from '{"orders":0,"captures":0,"refundPendingMinor":0}'::jsonb
     or result->'shifts' is distinct from '[]'::jsonb or result->>'currency' <> 'MXN'
   then raise exception 'DAY_SUMMARY_EMPTY_DAY_WRONG %', result; end if;
 
   -- ---- The previous day: only what ended inside it (o4 paid, one second before the boundary excluded from Oct 5).
   result := app_private.read_branch_day_summary(u_manager,pg_temp.ds_request(restaurant,branch,'2026-10-04'));
   if result->'totals'->>'salesMinor' <> '7300' or result->'totals'->>'paymentCount' <> '2'
-    or result->'cancellations' is distinct from '{"orders":1,"captures":1}'::jsonb
-    or result->'ordersPaid' is distinct from '{"count":2,"amountMinor":7300}'::jsonb
+    or result->'cancellations' is distinct from '{"orders":1,"captures":1,"refundPendingMinor":0}'::jsonb
+    or result->'ordersPaid' is distinct from '{"count":2,"amountMinor":7300,"averageMinor":3650}'::jsonb
     or jsonb_array_length(result->'shifts') <> 1
   then raise exception 'DAY_SUMMARY_PREVIOUS_DAY_WRONG %', result; end if;
 
@@ -325,6 +339,37 @@ begin
     (select count(*) from app.cash_register_sessions),(select count(*) from app.operational_shifts),
     (select count(*) from app.capture_drafts),(select count(*) from app.order_deliveries)));
   if before_counts is distinct from after_counts then raise exception 'DAY_SUMMARY_WROTE'; end if;
+
+  -- ---- sql-average-ticket: 3 paid orders totaling 100001 -> averageMinor = 33334; 0 paid orders -> null; rounding property.
+  insert into app.orders(id,restaurant_id,branch_id,channel,status,aggregate,version,created_by,updated_by,created_at,updated_at)
+  select t.o,restaurant,branch,'counter','paid',pg_temp.ds_order(restaurant,branch,t.o,'counter','paid','{}'::jsonb),1,
+    creator,creator,'2026-10-07T18:00:00Z','2026-10-07T18:00:00Z'
+  from (values (o_avg1),(o_avg2),(o_avg3)) as t(o);
+  perform pg_temp.ds_payment(restaurant,branch,o_avg1,s_a,gen_random_uuid(),'cash',33334,0,'2026-10-07T18:00:00Z',creator);
+  perform pg_temp.ds_payment(restaurant,branch,o_avg2,s_a,gen_random_uuid(),'cash',33334,0,'2026-10-07T18:05:00Z',creator);
+  perform pg_temp.ds_payment(restaurant,branch,o_avg3,s_a,gen_random_uuid(),'cash',33333,0,'2026-10-07T18:10:00Z',creator);
+
+  execute 'set local role app_api';
+  result := app_private.read_branch_day_summary(u_manager,pg_temp.ds_request(restaurant,branch,'2026-10-07'));
+  if result->'ordersPaid' is distinct from '{"count":3,"amountMinor":100001,"averageMinor":33334}'::jsonb
+  then raise exception 'DAY_SUMMARY_AVERAGE_TICKET_3_ORDERS_WRONG %', result->'ordersPaid'; end if;
+
+  result := app_private.read_branch_day_summary(u_manager,pg_temp.ds_request(restaurant,branch,'2026-10-08'));
+  if (result->'ordersPaid'->>'count')::bigint <> 0
+    or not (result->'ordersPaid' ? 'averageMinor')
+    or pg_catalog.jsonb_typeof(result->'ordersPaid'->'averageMinor') is distinct from 'null'
+  then raise exception 'DAY_SUMMARY_AVERAGE_TICKET_EMPTY_WRONG %', result->'ordersPaid'; end if;
+
+  foreach avg_day in array array['2026-10-07','2026-10-05','2026-10-04'] loop
+    result := app_private.read_branch_day_summary(u_manager,pg_temp.ds_request(restaurant,branch,avg_day));
+    avg_count := (result->'ordersPaid'->>'count')::bigint;
+    avg_amount := (result->'ordersPaid'->>'amountMinor')::bigint;
+    avg_minor := (result->'ordersPaid'->>'averageMinor')::bigint;
+    if avg_minor <> floor((avg_amount * 2 + avg_count)::numeric / (2 * avg_count))::bigint
+      or abs(avg_minor * avg_count - avg_amount) >= avg_count
+    then raise exception 'DAY_SUMMARY_AVERAGE_TICKET_ROUNDING_WRONG % %', avg_day, result->'ordersPaid'; end if;
+  end loop;
+  execute 'reset role';
 end
 $branch_day_summary_tests$;
 commit;
