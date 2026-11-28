@@ -40,14 +40,21 @@ export function daySummaryRows(summary: BranchDaySummaryV1): readonly (readonly 
       .map((row) => ["metodo", row.method, "", currency, String(row.amountMinor), String(row.paymentCount),
         `propina=${row.tipMinor}`]),
   ];
+  // Contrato §2.1: todas las filas `turno`, después todas las `caja`, después todos los `movimiento`.
   for (const shift of summary.shifts) {
     // El contrato no expone fondo a nivel de turno: importe vacío, sin inventar 0.
     rows.push(["turno", shift.shiftId, timeZone, "", "", String(shift.registers.length),
       `nombre=${shift.name};estado=${shift.status};abierto=${shift.openedAt};cerrado=${shift.closedAt ?? ""}`]);
+  }
+  for (const shift of summary.shifts) {
     for (const register of shift.registers) {
       rows.push(["caja", register.registerId, timeZone, currency, String(register.expectedCashBalanceMinor),
         String(register.movements.length),
         `turno=${shift.shiftId};estado=${register.status};contado=${register.countedClosingBalanceMinor ?? ""};diferencia=${register.differenceMinor ?? ""}`]);
+    }
+  }
+  for (const shift of summary.shifts) {
+    for (const register of shift.registers) {
       for (const movement of register.movements) {
         rows.push(["movimiento", movement.type, timeZone, currency, String(movement.amountMinor),
           String(movement.count), `caja=${register.registerId};direccion=${movement.direction}`]);

@@ -15,6 +15,10 @@ const session1 = "3f0c1b8e-1111-4aaa-9bbb-000000000004";
 const session2 = "3f0c1b8e-1111-4aaa-9bbb-000000000005";
 const cashier1 = "3f0c1b8e-1111-4aaa-9bbb-000000000006";
 const cashier2 = "3f0c1b8e-1111-4aaa-9bbb-000000000007";
+const shiftId2 = "3f0c1b8e-1111-4aaa-9bbb-000000000008";
+const register3 = "3f0c1b8e-1111-4aaa-9bbb-000000000009";
+const session3 = "3f0c1b8e-1111-4aaa-9bbb-000000000010";
+const cashier3 = "3f0c1b8e-1111-4aaa-9bbb-000000000011";
 const zero = { amountMinor: 0, paymentCount: 0, tipMinor: 0 };
 
 function parsed(value: unknown) {
@@ -78,6 +82,25 @@ function richSummary(): unknown {
       }],
       shiftId,
       status: "closed",
+    }, {
+      closedAt: "2026-10-06T02:00:00.000Z",
+      name: "Turno nocturno",
+      openedAt: "2026-10-05T18:00:00.000Z",
+      registers: [{
+        cashRegisterSessionId: session3,
+        cashierId: cashier3,
+        closedAt: "2026-10-06T02:00:00.000Z",
+        countedClosingBalanceMinor: 700,
+        differenceMinor: 200,
+        expectedCashBalanceMinor: 500,
+        movements: [{ amountMinor: 200, count: 1, direction: "in", type: "cash_sale" }],
+        openedAt: "2026-10-05T18:05:00.000Z",
+        openingFloatMinor: 300,
+        registerId: register3,
+        status: "closed",
+      }],
+      shiftId: shiftId2,
+      status: "closed",
     }],
     timeZone: "America/Hermosillo",
     totals: { cashTipsMinor: 500, paymentCount: 3, salesMinor: 15000, tipsMinor: 500 },
@@ -102,7 +125,7 @@ function emptySummary(): unknown {
   };
 }
 
-test("rich day maps every section in table order, nested shift -> register -> movement", () => {
+test("rich day maps every section in table order: all turns, then all registers, then all movements", () => {
   const rows = daySummaryRows(parsed(richSummary()));
   assert.deepEqual(rows, [
     HEADER,
@@ -117,13 +140,18 @@ test("rich day maps every section in table order, nested shift -> register -> mo
     ["metodo", "transfer", "", "MXN", "3000", "1", "propina=0"],
     ["turno", shiftId, "America/Hermosillo", "", "", "2",
       "nombre=Turno matutino;estado=closed;abierto=2026-10-05T10:00:00.000Z;cerrado=2026-10-05T18:00:00.000Z"],
+    ["turno", shiftId2, "America/Hermosillo", "", "", "1",
+      "nombre=Turno nocturno;estado=closed;abierto=2026-10-05T18:00:00.000Z;cerrado=2026-10-06T02:00:00.000Z"],
     ["caja", register1, "America/Hermosillo", "MXN", "5000", "1",
       `turno=${shiftId};estado=closed;contado=4850;diferencia=-150`],
-    ["movimiento", "cash_sale", "America/Hermosillo", "MXN", "3000", "2", `caja=${register1};direccion=in`],
     ["caja", register2, "America/Hermosillo", "MXN", "1000", "2",
       `turno=${shiftId};estado=closed;contado=1000;diferencia=0`],
+    ["caja", register3, "America/Hermosillo", "MXN", "500", "1",
+      `turno=${shiftId2};estado=closed;contado=700;diferencia=200`],
+    ["movimiento", "cash_sale", "America/Hermosillo", "MXN", "3000", "2", `caja=${register1};direccion=in`],
     ["movimiento", "cash_in", "America/Hermosillo", "MXN", "500", "1", `caja=${register2};direccion=in`],
     ["movimiento", "cash_out", "America/Hermosillo", "MXN", "500", "1", `caja=${register2};direccion=out`],
+    ["movimiento", "cash_sale", "America/Hermosillo", "MXN", "200", "1", `caja=${register3};direccion=in`],
   ]);
 });
 
